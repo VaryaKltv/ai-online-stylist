@@ -1,0 +1,151 @@
+[
+  {
+    "brand": "LIME",
+    "baseUrl": "https://limestore.com/ru_ru",
+    "status": "needs-feed-or-parser",
+    "notes": "Основной бренд, но каталог часто защищен динамической выдачей. Лучше подключить фид или отдельный parser adapter.",
+    "categories": {
+      "верх": ["https://limestore.com/ru_ru/catalog/zhenshchinam/odezhda/bluzy-i-rubashki/", "https://limestore.com/ru_ru/catalog/zhenshchinam/odezhda/topy/"],
+      "низ": ["https://limestore.com/ru_ru/catalog/zhenshchinam/odezhda/yubki/", "https://limestore.com/ru_ru/catalog/zhenshchinam/odezhda/bryuki/", "https://limestore.com/ru_ru/catalog/zhenshchinam/odezhda/shorty/"],
+      "сумка": ["https://limestore.com/ru_ru/catalog/zhenshchinam/aksessuary/sumki/"],
+      "обувь": ["https://limestore.com/ru_ru/catalog/zhenshchinam/obuv/"],
+      "аксессуары": ["https://limestore.com/ru_ru/catalog/zhenshchinam/aksessuary/"]
+    }
+  },
+  {
+    "brand": "Love Republic",
+    "baseUrl": "https://loverepublic.ru",
+    "status": "parser-ready",
+    "categories": {
+      "верх": ["https://loverepublic.ru/catalog/odezhda/bluzy/", "https://loverepublic.ru/catalog/odezhda/topy/"],
+      "низ": ["https://loverepublic.ru/catalog/odezhda/yubki/", "https://loverepublic.ru/catalog/odezhda/bryuki/", "https://loverepublic.ru/catalog/odezhda/shorty/"],
+      "сумка": ["https://loverepublic.ru/catalog/sumki/"],
+      "обувь": ["https://loverepublic.ru/catalog/shoes/"],
+      "аксессуары": ["https://loverepublic.ru/catalog/ukrasheniya/"]
+    }
+  },
+  {
+    "brand": "Befree",
+    "baseUrl": "https://befree.ru",
+    "status": "parser-ready",
+    "categories": {
+      "верх": ["https://befree.ru/zhenskaya/catalog/rubashki", "https://befree.ru/zhenskaya/catalog/topy", "https://befree.ru/zhenskaya/catalog/bluzki"],
+      "низ": ["https://befree.ru/zhenskaya/catalog/yubki", "https://befree.ru/zhenskaya/catalog/bryuki", "https://befree.ru/zhenskaya/catalog/shorty"],
+      "сумка": ["https://befree.ru/zhenskaya/catalog/sumki"],
+      "обувь": ["https://befree.ru/zhenskaya/catalog/obuv"],
+      "аксессуары": ["https://befree.ru/zhenskaya/catalog/ukrasheniya"]
+    }
+  },
+  {
+    "brand": "MAAG",
+    "baseUrl": "https://maag-fashion.com",
+    "status": "parser-ready",
+    "categories": {
+      "верх": ["https://maag-fashion.com/catalog/zhenshchinam/odezhda/rubashki/", "https://maag-fashion.com/catalog/zhenshchinam/odezhda/topy/"],
+      "низ": ["https://maag-fashion.com/catalog/zhenshchinam/odezhda/yubki/", "https://maag-fashion.com/catalog/zhenshchinam/odezhda/bryuki/", "https://maag-fashion.com/catalog/zhenshchinam/odezhda/shorty/"],
+      "сумка": ["https://maag-fashion.com/catalog/zhenshchinam/aksessuary/sumki/"],
+      "обувь": ["https://maag-fashion.com/catalog/zhenshchinam/obuv/"],
+      "аксессуары": ["https://maag-fashion.com/catalog/zhenshchinam/aksessuary/"]
+    }
+  },
+  {
+    "brand": "Zarina",
+    "baseUrl": "https://zarina.ru",
+    "status": "parser-ready",
+    "categories": {
+      "верх": ["https://zarina.ru/catalog/rubashki/", "https://zarina.ru/catalog/topy/", "https://zarina.ru/catalog/bluzy/"],
+      "низ": ["https://zarina.ru/catalog/yubki/", "https://zarina.ru/catalog/bryuki/", "https://zarina.ru/catalog/shorty/"],
+      "сумка": ["https://zarina.ru/catalog/aksessuary/sumki/"],
+      "обувь": ["https://zarina.ru/catalog/obuv/"],
+      "аксессуары": ["https://zarina.ru/catalog/aksessuary/"]
+    }
+  },
+  {
+    "brand": "Sela",
+    "baseUrl": "https://www.sela.ru",
+    "status": "parser-ready",
+    "categories": {
+      "верх": ["https://www.sela.ru/eshop/women/blouses/", "https://www.sela.ru/eshop/women/t-shirts-tops/"],
+      "низ": ["https://www.sela.ru/eshop/women/skirts/", "https://www.sela.ru/eshop/women/trousers/", "https://www.sela.ru/eshop/women/shorts/"],
+      "сумка": ["https://www.sela.ru/eshop/women/accessories/bags/"],
+      "обувь": ["https://www.sela.ru/eshop/women/shoes/"],
+      "аксессуары": ["https://www.sela.ru/eshop/women/accessories/"]
+    }
+  },
+  {
+    "brand": "O'STIN",
+    "baseUrl": "https://ostin.com",
+    "status": "parser-ready",
+    "categories": {
+      "верх": ["https://ostin.com/catalog/zhenshchinam/odezhda/rubashki-i-bluzki", "https://ostin.com/catalog/zhenshchinam/odezhda/futbolki-i-topy"],
+      "низ": ["https://ostin.com/catalog/zhenshchinam/odezhda/yubki", "https://ostin.com/catalog/zhenshchinam/odezhda/bryuki", "https://ostin.com/catalog/zhenshchinam/odezhda/shorty"],
+      "сумка": ["https://ostin.com/catalog/zhenshchinam/aksessuary/sumki"],
+      "обувь": ["https://ostin.com/catalog/zhenshchinam/obuv"],
+      "аксессуары": ["https://ostin.com/catalog/zhenshchinam/aksessuary"]
+    }
+  },
+  {
+    "brand": "Gloria Jeans",
+    "baseUrl": "https://www.gloria-jeans.ru",
+    "status": "parser-ready",
+    "categories": {
+      "верх": ["https://www.gloria-jeans.ru/c/zhenshchinam/odezhda/rubashki", "https://www.gloria-jeans.ru/c/zhenshchinam/odezhda/topy"],
+      "низ": ["https://www.gloria-jeans.ru/c/zhenshchinam/odezhda/yubki", "https://www.gloria-jeans.ru/c/zhenshchinam/odezhda/bryuki", "https://www.gloria-jeans.ru/c/zhenshchinam/odezhda/shorty"],
+      "сумка": ["https://www.gloria-jeans.ru/c/zhenshchinam/aksessuary/sumki"],
+      "обувь": ["https://www.gloria-jeans.ru/c/zhenshchinam/obuv"],
+      "аксессуары": ["https://www.gloria-jeans.ru/c/zhenshchinam/aksessuary"]
+    }
+  },
+  {
+    "brand": "12 STOREEZ",
+    "baseUrl": "https://12storeez.com",
+    "status": "needs-feed-or-parser",
+    "notes": "Основной бренд, но для надежности нужен feed/API или отдельный adapter под динамический каталог.",
+    "categories": {
+      "верх": ["https://12storeez.com/catalog/zhenskaya-odezhda/rubashki/", "https://12storeez.com/catalog/zhenskaya-odezhda/topy/"],
+      "низ": ["https://12storeez.com/catalog/zhenskaya-odezhda/yubki/", "https://12storeez.com/catalog/zhenskaya-odezhda/bryuki/", "https://12storeez.com/catalog/zhenskaya-odezhda/shorty/"],
+      "сумка": ["https://12storeez.com/catalog/zhenskaya-odezhda/aksessuary/sumki/"],
+      "обувь": ["https://12storeez.com/catalog/zhenskaya-odezhda/obuv/"],
+      "аксессуары": ["https://12storeez.com/catalog/zhenskaya-odezhda/aksessuary/"]
+    }
+  },
+  {
+    "brand": "Lichi",
+    "baseUrl": "https://lichi.com",
+    "status": "needs-feed-or-parser",
+    "categories": {
+      "верх": ["https://lichi.com/ru/ru/category/blouses-shirts", "https://lichi.com/ru/ru/category/tops"],
+      "низ": ["https://lichi.com/ru/ru/category/skirts", "https://lichi.com/ru/ru/category/pants", "https://lichi.com/ru/ru/category/shorts"],
+      "сумка": ["https://lichi.com/ru/ru/category/bags"],
+      "обувь": ["https://lichi.com/ru/ru/category/shoes"],
+      "аксессуары": ["https://lichi.com/ru/ru/category/accessories"]
+    }
+  },
+  {
+    "brand": "Ekonika",
+    "baseUrl": "https://ekonika.ru",
+    "status": "parser-ready",
+    "categories": {
+      "сумка": ["https://ekonika.ru/catalog/women/bags/"],
+      "обувь": ["https://ekonika.ru/catalog/women/shoes/"],
+      "аксессуары": ["https://ekonika.ru/catalog/women/accessories/"]
+    }
+  },
+  {
+    "brand": "Ralf Ringer",
+    "baseUrl": "https://ralf.ru",
+    "status": "parser-ready",
+    "categories": {
+      "обувь": ["https://ralf.ru/catalog/zhenskaya-obuv/"]
+    }
+  },
+  {
+    "brand": "Incanto",
+    "baseUrl": "https://incanto.eu",
+    "status": "parser-ready",
+    "categories": {
+      "верх": ["https://incanto.eu/collections/topy/"],
+      "низ": ["https://incanto.eu/collections/shorty/", "https://incanto.eu/collections/bryuki/"]
+    }
+  }
+]
