@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StyleMate AI — онлайн-стилист</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <main>
+        <section class="hero">
+          <div class="app-topbar" aria-label="StyleMate AI">
+            <span class="app-logo">SM</span>
+            <div>
+              <strong>StyleMate AI</strong>
+              <small>готовые подборки</small>
+            </div>
+          </div>
+
+          <div class="hero-copy">
+            <span class="eyebrow">онлайн-стилист</span>
+            <h1>Аутфиты вокруг вашей вещи</h1>
+            <p>Загрузите фото вещи, выберите повод, и сервис соберет один готовый образ из вещей в магазинах.</p>
+            <div class="hero-stats" aria-label="Возможности сервиса">
+              <span>офис</span>
+              <span>casual</span>
+              <span>вечер</span>
+            </div>
+            <a class="hero-cta" href="#stylistForm">Собрать образ</a>
+          </div>
+
+          <div class="hero-media" aria-hidden="true">
+            <img src="assets/stylist-hero.png" alt="" />
+            <div class="hero-ticket">
+              <span>ваша вещь</span>
+              <strong>1 готовый образ</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="workspace">
+          <form class="stylist-form" id="stylistForm">
+            <div class="section-title">
+              <span>01</span>
+              <h2>Фото вещи</h2>
+            </div>
+
+            <div class="upload-grid">
+              <label class="upload-card">
+                <input id="itemPhoto" type="file" accept="image/*" />
+                <span>Загрузить вещь</span>
+                <img id="previewItem" alt="" />
+                <small>футболка, юбка, сумка, обувь или другая вещь</small>
+              </label>
+            </div>
+
+            <div class="section-title compact-title">
+              <span>02</span>
+              <h2>Анкета</h2>
+            </div>
+
+            <div class="field-grid">
+              <label class="field">
+                <span>Для кого</span>
+                <select id="gender">
+                  <option value="women" selected>Девушка / женщина</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Возраст</span>
+                <input id="age" type="number" min="16" max="80" placeholder="например, 28" />
+              </label>
+
+              <label class="field">
+                <span>Что загрузили</span>
+                <select id="itemCategory">
+                  <option value="верх" selected>Верх: футболка, топ, рубашка</option>
+                  <option value="низ">Низ: юбка, брюки, шорты</option>
+                  <option value="обувь">Обувь</option>
+                  <option value="сумка">Сумка</option>
+                  <option value="аксессуары">Аксессуар</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Бюджет на один образ</span>
+                <select id="budget">
+                  <option value="budget">до 25 000 ₽</option>
+                  <option value="middle" selected>25 000–70 000 ₽</option>
+                  <option value="designer">70 000–180 000 ₽</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Повод</span>
+                <select id="occasion">
+                  <option>офис и встречи</option>
+                  <option>повседневная одежда</option>
+                  <option>вечерние наряды</option>
+                </select>
+              </label>
+
+            </div>
+
+            <div class="form-actions">
+              <button class="primary-button" type="submit">Собрать аутфиты</button>
+              <button class="ghost-button" id="sampleButton" type="button">Заполнить пример</button>
+            </div>
+            <p class="form-note">
+              Загруженная вещь станет основой готового образа. Сервис доберет к ней вещи из магазинов.
+            </p>
+          </form>
+
+          <section class="result-panel" aria-live="polite">
+            <div class="empty-state" id="emptyState">
+              <span>↳</span>
+              <h2>Результат появится здесь</h2>
+              <p>После отправки вы увидите один готовый аутфит: комплект вещей, ссылки на покупку и заметки стилиста.</p>
+            </div>
+
+            <div class="loading-state hidden" id="loadingState">
+              <div class="loader"></div>
+              <h2>Собираю аутфиты</h2>
+              <p>Анализирую вещь, повод и подбираю, с чем ее носить.</p>
+              <div class="skeleton"></div>
+              <div class="skeleton short"></div>
+            </div>
+
+            <div class="error-state hidden" id="errorState">
+              <h2>Нужно чуть больше данных</h2>
+              <p id="errorText">Загрузите вещь и выберите повод.</p>
+            </div>
+
+            <div class="result-state hidden" id="resultState"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>

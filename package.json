@@ -1,0 +1,10 @@
+{
+  "name": "ai-online-stylist",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Frontend prototype of an AI online stylist with photorealistic avatar try-on renders.",
+  "scripts": {
+    "start": "node server.mjs",
+    "sync:catalog": "node tools/catalog-sync.mjs"
+  }
+}
