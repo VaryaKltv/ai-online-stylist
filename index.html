@@ -44,7 +44,7 @@
           <form class="stylist-form" id="stylistForm">
             <div class="section-title">
               <span>01</span>
-              <h2>Фото вещи</h2>
+              <h2>Фото</h2>
             </div>
 
             <div class="upload-grid">
@@ -54,7 +54,17 @@
                 <img id="previewItem" alt="" />
                 <small>футболка, юбка, сумка, обувь или другая вещь</small>
               </label>
+
+              <label class="upload-card">
+                <input id="personPhoto" type="file" accept="image/*" />
+                <span>Загрузить своё фото</span>
+                <img id="previewPerson" alt="" />
+                <small id="personHint">портрет при дневном свете, чтобы подобрать цвета под ваш цветотип. Необязательно</small>
+              </label>
             </div>
+            <p class="form-note upload-note" id="aiNote">
+              Фото передаётся в ChatGPT (OpenAI) только для анализа и не сохраняется на нашем сервере.
+            </p>
 
             <div class="section-title compact-title">
               <span>02</span>

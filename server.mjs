@@ -1,14 +1,39 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createCatalog } from "./catalog-source.mjs";
+import { createFetch } from "./proxy-fetch.mjs";
+import { loadLocalEnv } from "./env.mjs";
+import { cleanForLog, logger, recentLogs } from "./logger.mjs";
+import { describeProxy } from "./proxy-fetch.mjs";
+import { AiError, isAiConfigured, runAiStylist, validateDataUrl } from "./ai-stylist.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-loadLocalEnv();
+loadLocalEnv(__dirname);
 const port = Number(process.env.PORT || 8012);
-const maxRequestBodyBytes = 90 * 1024 * 1024;
+const maxRequestBodyBytes = 15 * 1024 * 1024;
 const productUrlCache = new Map();
+const catalog = createCatalog({ root: __dirname, log: logger });
+const clientLogByIp = new Map();
+const CLIENT_LOG_PER_HOUR = 30;
+const CLIENT_EVENTS = new Set(["submit_ok", "submit_error", "js_error"]);
+
+process.on("uncaughtException", (error) => crash("необработанная ошибка", error));
+process.on("unhandledRejection", (error) => crash("необработанный отказ промиса", error));
+process.on("SIGTERM", () => {
+  logger.warn("[server] получен сигнал остановки (SIGTERM), сервер завершает работу");
+  process.exit(0);
+});
+
+function crash(kind, error) {
+  logger.error(`[server] ${kind}: ${error?.stack || error}`);
+  setTimeout(() => process.exit(1), 200);
+}
+const aiRateByIp = new Map();
+const aiDaily = { day: "", count: 0 };
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -22,21 +47,10 @@ const mimeTypes = {
   ".webp": "image/webp"
 };
 
-function loadLocalEnv() {
-  const envPath = path.join(__dirname, ".env");
-  if (!existsSync(envPath)) return;
-
-  const rows = readFileSync(envPath, "utf8").split(/\r?\n/);
-  rows.forEach((row) => {
-    const line = row.trim();
-    if (!line || line.startsWith("#") || !line.includes("=")) return;
-    const [key, ...valueParts] = line.split("=");
-    const value = valueParts.join("=").trim().replace(/^["']|["']$/g, "");
-    if (key && !process.env[key]) process.env[key] = value;
-  });
-}
-
 const server = createServer(async (request, response) => {
+  const startedAt = Date.now();
+  response.on("finish", () => logRequest(request, response, Date.now() - startedAt));
+
   try {
     const requestUrl = new URL(request.url, `http://${request.headers.host}`);
     if (request.method === "OPTIONS" && requestUrl.pathname.startsWith("/api/")) {
@@ -45,7 +59,29 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && requestUrl.pathname === "/api/status") {
-      sendJson(response, 200, { status: "ok" });
+      sendJson(response, 200, { status: "ok", aiConfigured: isAiConfigured(), looksSource: catalog.mode });
+      return;
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/catalog") {
+      const { products, source, mode, generatedAt, fallbackReason } = await catalog.getCatalog();
+      logger.log(`[catalog] отдан каталог: источник=${source}, товаров=${products.length}${fallbackReason ? `, причина отката: ${fallbackReason}` : ""}`);
+      sendJson(response, 200, { status: "ok", mode, source, generatedAt, fallbackReason, products });
+      return;
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/logs") {
+      handleLogs(requestUrl, response);
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/client-log") {
+      await handleClientLog(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/stylist") {
+      await handleStylist(request, response);
       return;
     }
 
@@ -56,13 +92,155 @@ const server = createServer(async (request, response) => {
 
     await serveStatic(request, response);
   } catch (error) {
+    logger.error(`[http] ошибка обработки ${request.method} ${request.url.split("?")[0]}: ${error.stack || error.message}`);
     sendJson(response, 500, { status: "error", message: error.message });
   }
 });
 
 server.listen(port, "0.0.0.0", () => {
-  console.log(`StyleMate AI: http://127.0.0.1:${port}/`);
+  logger.log(`[server] StyleMate AI запущен: порт ${port}, Node ${process.versions.node}`);
+  logger.log(`[config] источник луков: ${catalog.mode}; ChatGPT: ${isAiConfigured() ? `ключ задан, модель ${process.env.OPENAI_MODEL || "gpt-4o"}` : "ключ НЕ задан"}`);
+  logger.log(`[config] прокси для ChatGPT: ${describeConfigured(process.env.OPENAI_PROXY_URL)}; прокси для магазинов: ${describeConfigured(process.env.PARSE_PROXY_URL)}`);
+  logger.log(`[config] токен бота: ${process.env.TELEGRAM_BOT_TOKEN ? "задан" : "не задан"}; просмотр логов по адресу: ${process.env.LOGS_TOKEN ? "включён" : "выключен (LOGS_TOKEN не задан)"}`);
+  catalog.start();
 });
+
+function describeConfigured(proxyUrl) {
+  return proxyUrl ? describeProxy(proxyUrl) : "нет";
+}
+
+function deviceClass(request) {
+  const agent = String(request.headers["user-agent"] || "");
+  if (/Telegram/i.test(agent)) return "telegram";
+  if (/iPhone|iPad|iOS/i.test(agent)) return "ios";
+  if (/Android/i.test(agent)) return "android";
+  return "компьютер";
+}
+
+function logRequest(request, response, durationMs) {
+  const pathname = request.url.split("?")[0];
+  const failed = response.statusCode >= 400;
+  const isApi = pathname.startsWith("/api/");
+  const quiet = pathname === "/api/client-log" || !failed && (
+    pathname === "/api/status" ||
+    pathname === "/api/catalog" ||
+    pathname === "/api/stylist" ||
+    (!isApi && pathname !== "/" && !pathname.endsWith(".html"))
+  );
+  if (quiet) return;
+
+  const device = pathname === "/" ? `, устройство: ${deviceClass(request)}` : "";
+  const line = `[http] ${request.method} ${pathname} → ${response.statusCode} за ${durationMs} мс${device}`;
+  if (failed) logger.warn(line);
+  else logger.log(line);
+}
+
+function handleLogs(requestUrl, response) {
+  const expected = String(process.env.LOGS_TOKEN || "");
+  const given = String(requestUrl.searchParams.get("token") || "");
+  const valid = expected && given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+  if (!valid) {
+    sendText(response, 404, "Not found");
+    return;
+  }
+
+  const lines = Number(requestUrl.searchParams.get("lines")) || 300;
+  response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+  response.end(`${recentLogs(lines).join("\n")}\n`);
+}
+
+async function handleClientLog(request, response) {
+  const ip = clientIp(request);
+  const now = Date.now();
+  const recent = (clientLogByIp.get(ip) || []).filter((time) => now - time < 3600 * 1000);
+  if (recent.length >= CLIENT_LOG_PER_HOUR) {
+    response.writeHead(429);
+    response.end();
+    return;
+  }
+  recent.push(now);
+  clientLogByIp.set(ip, recent);
+
+  try {
+    const payload = await readJson(request, 4096);
+    if (CLIENT_EVENTS.has(payload.event)) {
+      const details = Object.entries(payload.details || {})
+        .slice(0, 8)
+        .map(([key, value]) => `${cleanForLog(key, 30)}=${cleanForLog(value, 160)}`)
+        .join(", ");
+      logger[payload.event === "submit_ok" ? "log" : "warn"](`[client] ${payload.event}: ${details}; устройство: ${deviceClass(request)}`);
+    }
+  } catch {
+    // мусор от клиента не должен ронять сервер и засорять логи
+  }
+  response.writeHead(204);
+  response.end();
+}
+
+async function handleStylist(request, response) {
+  if (!isAiConfigured()) {
+    sendJson(response, 200, { status: "disabled", message: "ChatGPT не настроен на сервере." });
+    return;
+  }
+
+  const limitMessage = checkAiLimits(clientIp(request));
+  if (limitMessage) {
+    logger.warn(`[ai] запрос отклонён лимитом: ${limitMessage}`);
+    sendJson(response, 429, { status: "error", message: limitMessage });
+    return;
+  }
+
+  try {
+    const payload = await readJson(request);
+    const itemPhoto = validateDataUrl(payload.itemPhotoDataUrl, "Фото вещи");
+    const personPhoto = payload.personPhotoDataUrl ? validateDataUrl(payload.personPhotoDataUrl, "Фото человека") : null;
+    const form = {
+      occasion: String(payload.form?.occasion || ""),
+      budget: String(payload.form?.budget || "middle"),
+      itemCategory: String(payload.form?.itemCategory || "верх"),
+      age: String(payload.form?.age || "").slice(0, 3)
+    };
+
+    const { products } = await catalog.getCatalog();
+    logger.log(`[ai] запрос принят: фото человека ${personPhoto ? "есть" : "нет"}, повод «${form.occasion}», бюджет ${form.budget}`);
+    const startedAt = Date.now();
+    const result = await runAiStylist({ itemPhoto, personPhoto, form, products });
+    logger.log(`[ai] готово за ${((Date.now() - startedAt) / 1000).toFixed(1)} с, сумма ${result.look.total} ₽`);
+    sendJson(response, 200, { status: "ready", ...result });
+  } catch (error) {
+    const clientProblem = error instanceof AiError && error.httpStatus < 500;
+    logger[clientProblem ? "warn" : "error"](`[ai] ${clientProblem ? "запрос отклонён" : "ошибка"}: ${error instanceof AiError ? error.message : error.stack || error.message}`);
+    sendJson(response, error instanceof AiError ? error.httpStatus : 500, {
+      status: "error",
+      message: error instanceof AiError ? error.message : "Не удалось обработать запрос к ChatGPT."
+    });
+  }
+}
+
+function checkAiLimits(ip) {
+  const perHour = Number(process.env.AI_RATE_PER_HOUR || 8);
+  const perDay = Number(process.env.AI_DAILY_LIMIT || 300);
+  const now = Date.now();
+  const today = new Date().toISOString().slice(0, 10);
+
+  if (aiDaily.day !== today) {
+    aiDaily.day = today;
+    aiDaily.count = 0;
+  }
+  if (aiDaily.count >= perDay) return "На сегодня лимит подборок исчерпан. Попробуйте завтра.";
+
+  const recent = (aiRateByIp.get(ip) || []).filter((time) => now - time < 3600 * 1000);
+  if (recent.length >= perHour) return "Слишком много запросов. Попробуйте через час.";
+
+  recent.push(now);
+  aiRateByIp.set(ip, recent);
+  aiDaily.count += 1;
+  return "";
+}
+
+function clientIp(request) {
+  return String(request.headers["x-forwarded-for"] || request.socket.remoteAddress || "").split(",")[0].trim();
+}
 
 async function handleValidateProducts(request, response) {
   const payload = await readJson(request);
@@ -84,7 +262,8 @@ async function validateProductUrl(product) {
   const timeout = setTimeout(() => controller.abort(), 12000);
 
   try {
-    const productResponse = await fetch(product.url, {
+    const doFetch = await createFetch(process.env.PARSE_PROXY_URL);
+    const productResponse = await doFetch(product.url, {
       redirect: "follow",
       signal: controller.signal,
       headers: {
@@ -132,32 +311,44 @@ async function serveStatic(request, response) {
 
   const normalizedPath = decodeURIComponent(routePath === "/" ? "/index.html" : routePath);
   const requested = path.normalize(path.join(__dirname, normalizedPath));
+  const relative = path.relative(__dirname, requested);
+  const hidden = relative.split(path.sep).some((part) => part.startsWith(".") || part === "node_modules");
+  const extension = path.extname(requested).toLowerCase();
 
-  if (!requested.startsWith(__dirname) || !existsSync(requested)) {
+  if (relative.startsWith("..") || hidden || !mimeTypes[extension] || !existsSync(requested)) {
     sendText(response, 404, "Not found");
     return;
   }
 
-  const extension = path.extname(requested);
   const content = await readFile(requested);
   response.writeHead(200, {
-    "Content-Type": mimeTypes[extension] || "application/octet-stream",
+    "Content-Type": mimeTypes[extension],
     "Cache-Control": "no-store"
   });
   response.end(content);
 }
 
-function readJson(request) {
+function readJson(request, limit = maxRequestBodyBytes) {
   return new Promise((resolve, reject) => {
     let body = "";
+    let tooLarge = false;
     request.on("data", (chunk) => {
+      if (tooLarge) return;
       body += chunk;
-      if (body.length > maxRequestBodyBytes) {
-        reject(new Error("Фото слишком большое для генерации. Загрузите JPG/PNG полегче или обновите страницу: сервис теперь сжимает фото автоматически."));
-        request.pause();
+      if (body.length > limit) {
+        tooLarge = true;
+        body = "";
+        reject(new AiError("Запрос слишком большой. Загрузите фото полегче.", 413));
       }
     });
-    request.on("end", () => resolve(JSON.parse(body)));
+    request.on("end", () => {
+      if (tooLarge) return;
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        reject(new AiError("Некорректный запрос.", 400));
+      }
+    });
     request.on("error", reject);
   });
 }

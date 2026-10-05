@@ -1031,3 +1031,59 @@ main {
     text-align: left;
   }
 }
+
+.upload-note {
+  margin-top: -14px;
+  margin-bottom: 22px;
+}
+
+.color-profile {
+  margin: 0 0 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.color-profile h3 {
+  margin: 4px 0 12px;
+  font-size: 21px;
+}
+
+.color-profile dl {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
+.color-profile dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.color-profile dt {
+  color: var(--muted);
+}
+
+.color-profile dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 700;
+}
+
+.color-profile .tags {
+  margin-bottom: 0;
+}
+
+.profile-label {
+  margin: 12px 0 6px;
+  font-weight: 850;
+}
+
+.profile-comment,
+.profile-item {
+  margin: 12px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}

@@ -4,6 +4,26 @@ if (telegram) {
   telegram.expand();
 }
 
+let clientErrorReports = 0;
+
+function reportClient(event, details = {}) {
+  try {
+    const body = new Blob([JSON.stringify({ event, details })], { type: "application/json" });
+    const base = window.location.protocol === "file:" ? "http://127.0.0.1:8012" : "";
+    navigator.sendBeacon(`${base}/api/client-log`, body);
+  } catch {
+    // отчёт об ошибке не должен сам ломать страницу
+  }
+}
+
+window.addEventListener("error", (event) => {
+  if (clientErrorReports++ < 5) reportClient("js_error", { message: event.message, file: String(event.filename || "").split("/").pop(), line: event.lineno });
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  if (clientErrorReports++ < 5) reportClient("js_error", { message: event.reason?.message || String(event.reason) });
+});
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
@@ -25,14 +45,21 @@ const clearHistory = document.querySelector("#clearHistory");
 const sampleButton = document.querySelector("#sampleButton");
 const itemInput = document.querySelector("#itemPhoto");
 const itemPreview = document.querySelector("#previewItem");
+const personInput = document.querySelector("#personPhoto");
+const personPreview = document.querySelector("#previewPerson");
+const personHint = document.querySelector("#personHint");
+const aiNoteNode = document.querySelector("#aiNote");
 
 const historyKey = "stylemate-ai-history-v4";
 const apiBaseUrl = window.location.protocol === "file:" ? "http://127.0.0.1:8012" : "";
 let historyItems = JSON.parse(localStorage.getItem(historyKey) || "[]");
 const uploadedItemData = {};
+const uploadedPersonData = {};
 let activeCatalogProducts = [];
+let catalogLoadFailed = false;
 let catalogLinksValidated = false;
 const catalogLoadPromise = loadProductCatalog();
+const statusPromise = loadServerStatus();
 
 const defaultLookCount = 1;
 const defaultGoalsByOccasion = {
@@ -573,32 +600,34 @@ const occasionProfiles = {
   }
 };
 
-if (itemInput && itemPreview) {
-  itemInput.addEventListener("change", async () => {
-    const file = itemInput.files[0];
+function bindPhotoInput(input, preview, store, errorMessage) {
+  if (!input || !preview) return;
+
+  input.addEventListener("change", async () => {
+    const file = input.files[0];
     if (!file) {
-      delete uploadedItemData.photo;
-      itemPreview.removeAttribute("src");
-      itemPreview.classList.remove("visible");
+      delete store.photo;
+      preview.removeAttribute("src");
+      preview.classList.remove("visible");
       return;
     }
 
     try {
-      const optimizedSrc = await optimizePhotoForTryOn(file);
-      uploadedItemData.photo = {
-        name: file.name,
-        src: optimizedSrc
-      };
-      itemPreview.src = optimizedSrc;
-      itemPreview.classList.add("visible");
+      const optimizedSrc = await optimizePhoto(file);
+      store.photo = { name: file.name, src: optimizedSrc };
+      preview.src = optimizedSrc;
+      preview.classList.add("visible");
     } catch {
-      errorText.textContent = "Не удалось подготовить фото вещи. Попробуйте JPG/PNG без сильного размытия.";
+      errorText.textContent = errorMessage;
       showState(errorState);
     }
   });
 }
 
-function optimizePhotoForTryOn(file) {
+bindPhotoInput(itemInput, itemPreview, uploadedItemData, "Не удалось подготовить фото вещи. Попробуйте JPG/PNG без сильного размытия.");
+bindPhotoInput(personInput, personPreview, uploadedPersonData, "Не удалось подготовить фото. Попробуйте JPG/PNG без сильного размытия.");
+
+function optimizePhoto(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.addEventListener("error", reject);
@@ -606,7 +635,7 @@ function optimizePhotoForTryOn(file) {
       const image = new Image();
       image.addEventListener("error", reject);
       image.addEventListener("load", () => {
-        const maxSide = 1600;
+        const maxSide = 1024;
         const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
         const canvas = document.createElement("canvas");
         canvas.width = Math.round(image.width * scale);
@@ -674,26 +703,35 @@ function getFormData() {
   };
 }
 
-async function loadProductCatalog() {
-  const live = await loadCatalogFile("data/live-catalog.json");
-  const liveProducts = normalizeCatalogProducts(live?.products || []);
-  if (hasCompleteProductSet(liveProducts.filter((product) => product.inStock))) {
-    activeCatalogProducts = liveProducts;
-    return activeCatalogProducts;
-  }
+function fetchWithTimeout(url, timeoutMs, options = {}) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => window.clearTimeout(timer));
+}
 
-  const curated = await loadCatalogFile("data/curated-catalog.json");
-  activeCatalogProducts = normalizeCatalogProducts(curated?.products || []);
+async function loadProductCatalog() {
+  try {
+    const response = await fetchWithTimeout(`${apiBaseUrl}/api/catalog`, 30000);
+    const payload = await readJsonResponse(response, "Не удалось загрузить каталог.");
+    activeCatalogProducts = normalizeCatalogProducts(payload.products || []);
+  } catch {
+    catalogLoadFailed = true;
+    activeCatalogProducts = [];
+  }
   return activeCatalogProducts;
 }
 
-async function loadCatalogFile(path) {
+async function loadServerStatus() {
   try {
-    const response = await fetch(`${apiBaseUrl}/${path}`);
-    if (!response.ok) return null;
-    return await readJsonResponse(response, `Не удалось прочитать ${path}.`);
+    const response = await fetchWithTimeout(`${apiBaseUrl}/api/status`, 10000);
+    const status = await readJsonResponse(response, "Не удалось получить статус сервера.");
+    if (!status.aiConfigured) {
+      if (personHint) personHint.textContent = "Анализ по фото сейчас недоступен: на сервере не подключён ChatGPT.";
+      if (aiNoteNode) aiNoteNode.hidden = true;
+    }
+    return status;
   } catch {
-    return null;
+    return { aiConfigured: false };
   }
 }
 
@@ -1434,12 +1472,54 @@ function renderResult(record) {
       ${record.data.colors ? `<span>${record.data.colors}</span>` : ""}
       <span>магазины: ${stores.join(", ")}</span>
     </div>
+    ${record.aiNote ? `<div class="note-box">${escapeHtml(record.aiNote)}</div>` : ""}
+    ${renderColorProfile(record.analysis)}
     ${record.looks.map(renderLook).join("")}
     ${renderShoppingSummary(record)}
     <div class="note-box">
       Сейчас сервис берет вещи только из магазинов с конкретными карточками товаров: ${stores.join(", ")}.
       LIME, Mango и 12 STOREEZ лучше добавлять через фид или API, чтобы не получать ссылки на разделы и 404.
     </div>
+  `;
+}
+
+function renderColorProfile(analysis) {
+  if (!analysis) return "";
+  const { person, item } = analysis;
+  const chips = (values) => (values || []).map((value) => `<span>${escapeHtml(value)}</span>`).join("");
+  const itemBlock = item
+    ? `<p class="profile-item"><strong>Ваша вещь:</strong> ${escapeHtml(item.description)} · цвет: ${escapeHtml(item.color)} · стиль: ${escapeHtml(item.style)}</p>`
+    : "";
+
+  if (!person) return `<section class="color-profile">${itemBlock}</section>`;
+
+  if (!person.visible) {
+    return `
+      <section class="color-profile">
+        <p class="result-kicker">Цветотип</p>
+        <p>${escapeHtml(person.comment || "По этому фото не удалось определить цвета. Попробуйте портрет при дневном свете.")}</p>
+        ${itemBlock}
+      </section>
+    `;
+  }
+
+  return `
+    <section class="color-profile">
+      <p class="result-kicker">Ваш цветотип</p>
+      <h3>${escapeHtml(person.color_type)}</h3>
+      <dl>
+        <div><dt>Кожа</dt><dd>${escapeHtml(person.skin_tone)}, подтон: ${escapeHtml(person.undertone)}</dd></div>
+        <div><dt>Волосы</dt><dd>${escapeHtml(person.hair_color)}</dd></div>
+        <div><dt>Глаза</dt><dd>${escapeHtml(person.eye_color)}</dd></div>
+        <div><dt>Контраст</dt><dd>${escapeHtml(person.contrast)}</dd></div>
+      </dl>
+      <p class="profile-label">Вам идут</p>
+      <div class="tags">${chips(person.best_colors)}</div>
+      <p class="profile-label">Лучше избегать</p>
+      <div class="tags">${chips(person.avoid_colors)}</div>
+      <p class="profile-comment">Уверенность анализа: ${escapeHtml(person.confidence)}. ${escapeHtml(person.comment)}</p>
+      ${itemBlock}
+    </section>
   `;
 }
 
@@ -1639,28 +1719,102 @@ form.addEventListener("submit", async (event) => {
   await wait(1200);
 
   let record;
+  let step = "каталог";
+  const startedAt = Date.now();
   try {
+    updateLoadingCopy("Загружаю каталог", "Получаю список товаров с сервера. Если здесь долго, проблема в связи с сервером.");
     await catalogLoadPromise;
-    updateLoadingCopy(
-      "Проверяю товарные ссылки",
-      "Открываю карточки магазинов и убираю товары, которые дают 404 или страницу «не найдена»."
-    );
+    if (catalogLoadFailed) {
+      throw new Error("Не удалось загрузить каталог товаров с сервера. Проверьте интернет и обновите страницу.");
+    }
     await validateActiveCatalogProducts();
+
+    step = "статус сервера";
+    updateLoadingCopy("Проверяю подключение", "Узнаю у сервера, доступен ли ChatGPT.");
+    const status = await statusPromise;
+    let ai = null;
+    let aiNote = "";
+
+    if (status.aiConfigured) {
+      step = "ChatGPT";
+      updateLoadingCopy(
+        uploadedPersonData.photo ? "ChatGPT анализирует фото" : "ChatGPT подбирает образ",
+        "Определяем цвета и подбираем вещи из каталога. Это может занять до минуты."
+      );
+      try {
+        ai = await requestAiLook(data);
+      } catch (error) {
+        aiNote = `${error.message} Образ подобран по правилам без ChatGPT.`;
+      }
+    } else if (uploadedPersonData.photo) {
+      aiNote = "ChatGPT на сервере не подключён: фото человека не анализировалось, образ подобран по правилам.";
+    }
+
+    step = "подбор по правилам";
     record = {
       id: data.id,
       data,
-      looks: generateLooks(data)
+      aiNote,
+      analysis: ai?.analysis || null,
+      looks: ai ? [buildAiLook(data, ai)] : generateLooks(data)
     };
+
+    step = "показ результата";
+    renderResult(record);
+    saveRecord(record);
+    reportClient("submit_ok", {
+      мс: Date.now() - startedAt,
+      режим: ai ? "ChatGPT" : "правила",
+      фото_человека: uploadedPersonData.photo ? "да" : "нет",
+      примечание: aiNote
+    });
   } catch (error) {
+    console.error(error);
+    reportClient("submit_error", { шаг: step, сообщение: error.message, мс: Date.now() - startedAt });
     errorText.textContent = error.message;
     showState(errorState);
     return;
   }
 
-  renderResult(record);
-  saveRecord(record);
   showState(resultState);
 });
+
+async function requestAiLook(data) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 100000);
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/stylist`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        itemPhotoDataUrl: data.itemPhoto.src,
+        personPhotoDataUrl: uploadedPersonData.photo?.src || "",
+        form: { occasion: data.occasion, budget: data.budget, itemCategory: data.itemCategory, age: data.age }
+      })
+    });
+    const payload = await readJsonResponse(response, "ChatGPT ответил некорректно.");
+    if (payload.status !== "ready") throw new Error(payload.message || "ChatGPT недоступен.");
+    return payload;
+  } catch (error) {
+    throw new Error(error.name === "AbortError" ? "ChatGPT отвечает слишком долго." : error.message);
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function buildAiLook(data, ai) {
+  return {
+    title: `Лук 1: ${ai.look.title}`,
+    products: normalizeCatalogProducts(ai.look.products),
+    userItem: data.itemPhoto,
+    userItemCategory: data.itemCategory,
+    total: ai.look.total,
+    budgetLimit: budgetLimits[data.budget],
+    rationale: ai.look.rationale
+  };
+}
 
 function updateLoadingCopy(title, text) {
   const titleNode = loadingState.querySelector("h2");
