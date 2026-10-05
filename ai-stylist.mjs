@@ -15,6 +15,15 @@ export class AiError extends Error {
   }
 }
 
+export function normalizeGender(value) {
+  return value === "men" ? "men" : "women";
+}
+
+const WORDS = {
+  women: { owner: "клиентки", person: "клиентка", sex: "женщина", looks: "женские" },
+  men: { owner: "клиента", person: "клиент", sex: "мужчина", looks: "мужские" }
+};
+
 export function looksCount() {
   return Math.min(3, Math.max(2, Number(process.env.LOOKS_COUNT) || 2));
 }
@@ -29,7 +38,8 @@ export async function runAiStylist({ itemPhoto, personPhoto, form, products }) {
 
   const limit = BUDGET_LIMITS[form.budget] || BUDGET_LIMITS.middle;
   const needed = REQUIRED_CATEGORIES.filter((category) => category !== form.itemCategory);
-  const candidates = buildCandidates(products, needed, limit, form.occasion);
+  const gender = normalizeGender(form.gender);
+  const candidates = buildCandidates(products, needed, limit, form.occasion, gender);
   const schema = buildSchema(candidates, Boolean(personPhoto));
   logger.log(`[ai] кандидатов для ChatGPT: ${candidates.needed.map((category) => `${category} ${candidates.bySlot[category].length}`).join(", ")}; лимит ${limit} ₽`);
   const messages = [
@@ -94,13 +104,13 @@ export function validateDataUrl(value, label) {
   return value;
 }
 
-function buildCandidates(products, needed, limit, occasion) {
+function buildCandidates(products, needed, limit, occasion, gender) {
   const byId = new Map();
   const bySlot = {};
 
   for (const category of needed) {
-    const options = products.filter((product) => product.inStock && product.category === category && product.price > 0 && product.price <= limit);
-    if (!options.length) throw new AiError(`В каталоге нет подходящих товаров в категории «${category}» для этого бюджета.`, 422);
+    const options = products.filter((product) => product.inStock && product.category === category && product.price > 0 && product.price <= limit && (product.gender === gender || product.gender === "unisex"));
+    if (!options.length) throw new AiError(`В каталоге нет подходящих ${gender === "men" ? "мужских" : "женских"} товаров в категории «${category}» для этого бюджета.`, 422);
 
     const shuffled = options.map((product) => ({ product, order: Math.random() })).sort((a, b) => a.order - b.order).map((entry) => entry.product);
     const matching = shuffled.filter((product) => product.occasions.includes(occasion));
@@ -181,12 +191,14 @@ function buildSchema(candidates, hasPerson) {
 }
 
 function buildUserContent({ itemPhoto, personPhoto, form, candidates, limit }) {
+  const words = WORDS[normalizeGender(form.gender)];
   const lines = [
+    `Пол клиента: ${words.sex}. Подбирай ${words.looks} образы.`,
     `Повод: ${form.occasion}.`,
-    `Вещь клиентки на первом фото относится к категории «${form.itemCategory}» и обязательно входит в образ. Подбери к ней остальные позиции: ${candidates.needed.join(", ")}.`,
+    `Вещь ${words.owner} на первом фото относится к категории «${form.itemCategory}» и обязательно входит в образ. Подбери к ней остальные позиции: ${candidates.needed.join(", ")}.`,
     `Составь ${looksCount()} разных образа с этой вещью.`,
-    `Бюджет: в каждом образе сумма цен выбранных товаров не должна превышать ${limit} ₽ (вещь клиентки в бюджет не входит).`,
-    form.age ? `Возраст, указанный клиенткой: ${form.age}.` : "",
+    `Бюджет: в каждом образе сумма цен выбранных товаров не должна превышать ${limit} ₽ (вещь ${words.owner} в бюджет не входит).`,
+    form.age ? `Возраст, указанный клиентом: ${form.age}.` : "",
     "",
     "Кандидаты (id | бренд | название | цвет | цена | описание):"
   ];
@@ -200,13 +212,13 @@ function buildUserContent({ itemPhoto, personPhoto, form, candidates, limit }) {
 
   const content = [
     { type: "text", text: lines.filter((line) => line !== null).join("\n") },
-    { type: "text", text: "Фото 1 — вещь клиентки:" },
+    { type: "text", text: `Фото 1 — вещь ${words.owner}:` },
     { type: "image_url", image_url: { url: itemPhoto, detail: "high" } }
   ];
 
   if (personPhoto) {
     content.push(
-      { type: "text", text: "Фото 2 — клиентка (для определения цветотипа):" },
+      { type: "text", text: `Фото 2 — ${words.person} (для определения цветотипа):` },
       { type: "image_url", image_url: { url: personPhoto, detail: "high" } }
     );
   }
@@ -263,8 +275,8 @@ const SYSTEM_PROMPT = `Ты — профессиональный стилист 
 
 Работай только с тем, что реально видно на фото.
 
-Фото клиентки (если есть). Опиши только то, что влияет на подбор цветов одежды: глубину и подтон кожи, цвет волос, цвет глаз, контраст между ними. На этой основе определи цветотип (например «Холодное лето», «Тёплая осень») и перечисли цвета, которые ей идут, и цвета, которых лучше избегать. Не определяй и не упоминай национальность, расу, возраст по внешности, здоровье, вес, фигуру, привлекательность и личность. Если на фото нет чёткого лица человека или освещение мешает оценить цвета, поставь visible=false или confidence="низкая" и честно напиши об этом в comment, ничего не выдумывая.
+Фото клиента (если есть). Опиши только то, что влияет на подбор цветов одежды: глубину и подтон кожи, цвет волос, цвет глаз, контраст между ними. На этой основе определи цветотип (например «Холодное лето», «Тёплая осень») и перечисли цвета, которые подходят клиенту, и цвета, которых лучше избегать. Не определяй и не упоминай национальность, расу, возраст по внешности, здоровье, вес, фигуру, привлекательность и личность. Если на фото нет чёткого лица человека или освещение мешает оценить цвета, поставь visible=false или confidence="низкая" и честно напиши об этом в comment, ничего не выдумывая.
 
 Фото вещи. Кратко опиши, что это за вещь, её цвет и стиль.
 
-Образы. Составь запрошенное число разных образов. В каждом образе выбери ровно по одному товару в каждой категории только из списка кандидатов (по id), не придумывай товары. Образы строятся вокруг вещи клиентки, подходят под повод, сочетаются по цвету и стилю (и с палитрой клиентки, если есть её фото) и укладываются в бюджет по сумме цен. Образы должны заметно отличаться: не повторяй один и тот же товар в разных образах, делай разное настроение (например, строже и мягче, спокойнее и выразительнее). Не бери вещи одного и того же типа дважды в одном образе. В title дай короткое название образа (2–4 слова), в rationale на 3–5 предложений объясни выбор: цвета, силуэт, повод.`;
+Образы. Составь запрошенное число разных образов. В каждом образе выбери ровно по одному товару в каждой категории только из списка кандидатов (по id), не придумывай товары. Образы строятся вокруг вещи клиента, подходят под повод, сочетаются по цвету и стилю (и с палитрой клиента, если есть его фото) и укладываются в бюджет по сумме цен. Образы должны заметно отличаться: не повторяй один и тот же товар в разных образах, делай разное настроение (например, строже и мягче, спокойнее и выразительнее). Не бери вещи одного и того же типа дважды в одном образе. В title дай короткое название образа (2–4 слова), в rationale на 3–5 предложений объясни выбор: цвета, силуэт, повод.`;

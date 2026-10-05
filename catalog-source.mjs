@@ -8,6 +8,7 @@ const USER_AGENT = "StyleMateAI-CatalogBot/1.0";
 const FETCH_TIMEOUT_MS = 12000;
 const FETCH_CONCURRENCY = 4;
 const MIN_PRODUCTS_PER_CATEGORY = 2;
+export const FEMININE_MARKERS = /каблук|шпильк|платформ|казак|подвеск|(?<![а-яё])роз(?:а|ой|ы|у)(?![а-яё])|(?<![а-яё])бант|кружев|корсет|юбк|плать|бюст|колгот|чулк|(?<![а-яё])сабо|мюли|балетк|клатч|цепью|цепочк|леопард|меховая|меховой|бралет|бикини|для беременных/i;
 export const FAIL_THRESHOLD = 2;
 
 let httpFetch = fetch;
@@ -16,7 +17,7 @@ export function createCatalog({ root, log = console }) {
   const mode = String(process.env.LOOKS_SOURCE || "local").trim().toLowerCase() === "parse" ? "parse" : "local";
   const refreshMs = Math.max(1, Number(process.env.PARSE_REFRESH_HOURS || 6)) * 3600 * 1000;
   const perCategoryLimit = Math.max(1, Number(process.env.CATALOG_SYNC_LIMIT || 12));
-  const curatedPath = path.join(root, "data", "curated-catalog.json");
+  const curatedPaths = ["curated-catalog.json", "curated-catalog-men.json"].map((name) => path.join(root, "data", name));
   const livePath = path.join(root, "data", "live-catalog.json");
   const sourcesPath = path.join(root, "data", "brand-sources.json");
 
@@ -36,8 +37,12 @@ export function createCatalog({ root, log = console }) {
   }
 
   async function loadCurated() {
-    curated ||= await readCatalogFile(curatedPath);
-    return curated?.products || [];
+    if (!curated) {
+      const parts = await Promise.all(curatedPaths.map(readCatalogFile));
+      const loaded = parts.filter(Boolean);
+      curated = { generatedAt: loaded[0]?.generatedAt || "", products: loaded.flatMap((part) => part.products) };
+    }
+    return curated.products;
   }
 
   async function getAllProducts() {
@@ -54,12 +59,22 @@ export function createCatalog({ root, log = console }) {
     let fallbackReason = mode === "parse" ? lastSyncNote : "";
 
     if (mode === "parse" && live) {
-      const thin = REQUIRED_CATEGORIES.filter((category) => countInStock(live.products, category) < MIN_PRODUCTS_PER_CATEGORY);
-      if (thin.length < REQUIRED_CATEGORIES.length) {
-        products = [...live.products, ...curatedProducts.filter((product) => thin.includes(product.category))];
-        source = thin.length ? "parse+local" : "parse";
+      const merged = [];
+      const notes = [];
+      let usedParsed = false;
+      for (const gender of ["women", "men"]) {
+        const parsed = live.products.filter((product) => product.gender === gender);
+        const thin = REQUIRED_CATEGORIES.filter((category) => countInStock(parsed, category) < MIN_PRODUCTS_PER_CATEGORY);
+        const fallback = curatedProducts.filter((product) => product.gender === gender);
+        if (thin.length < REQUIRED_CATEGORIES.length) usedParsed = true;
+        merged.push(...(thin.length < REQUIRED_CATEGORIES.length ? parsed : []), ...fallback.filter((product) => thin.includes(product.category)));
+        if (thin.length && parsed.length) notes.push(`${gender === "men" ? "мужской" : "женский"} каталог: из локального добраны категории ${thin.join(", ")}`);
+      }
+      if (usedParsed) {
+        products = merged;
+        source = notes.length ? "parse+local" : "parse";
         generatedAt = live.generatedAt;
-        fallbackReason = thin.length ? `со своих сайтов спарсилось мало в категориях: ${thin.join(", ")} — они добраны из локального каталога` : "";
+        fallbackReason = notes.join("; ");
       }
     }
 
@@ -120,6 +135,7 @@ export function normalizeProducts(items) {
   return items
     .map((item) => ({
       brand: String(item.brand || "").trim(),
+      gender: item.gender === "men" || item.gender === "unisex" ? item.gender : "women",
       category: item.category,
       name: String(item.name || "").trim(),
       price: Number(item.price) || 0,
@@ -160,17 +176,17 @@ export function applyHealth(products, health) {
   return { products: result, excluded: products.length - result.length };
 }
 
-function dedupe(products) {
+export function dedupe(products) {
   const seen = new Set();
   return products.filter((product) => {
-    const key = product.url;
-    if (seen.has(key)) return false;
-    seen.add(key);
+    const keys = [product.url, `${product.gender}|${product.brand}|${product.category}|${product.name.toLowerCase()}`];
+    if (keys.some((key) => seen.has(key))) return false;
+    keys.forEach((key) => seen.add(key));
     return true;
   });
 }
 
-async function collectBrand(source, limit, log) {
+export async function collectBrand(source, limit, log) {
   const robots = await loadRobotsRules(source.baseUrl);
   const result = [];
   let failedCategoryPages = 0;
@@ -189,7 +205,7 @@ async function collectBrand(source, limit, log) {
         continue;
       }
 
-      const links = extractProductLinks(html, source.baseUrl).filter((url) => robots.allows(url)).slice(0, limit);
+      const links = extractProductLinks(html, source.baseUrl, source.productPattern).filter((url) => robots.allows(url)).slice(0, limit);
       const pages = await mapLimit(links, FETCH_CONCURRENCY, (url) => fetchProduct(source, category, url));
       const good = pages.filter(Boolean);
       log.log(`[catalog] ${source.brand} / ${category}: ${good.length} из ${links.length}`);
@@ -204,7 +220,8 @@ async function fetchProduct(source, category, url) {
   if (!html) return null;
   const product = extractProduct(html, url);
   if (!product) return null;
-  return { brand: source.brand, category, ...product };
+  if (source.gender === "men" && FEMININE_MARKERS.test(product.name)) return null;
+  return { brand: source.brand, gender: source.gender || "women", category, ...product };
 }
 
 export function extractProduct(html, url) {
@@ -220,7 +237,7 @@ export function extractProduct(html, url) {
   const inStock = availability ? /InStock|LimitedAvailability|PreOrder/i.test(availability) : !/нет в наличии|out of stock|sold out/i.test(stripTags(html).slice(0, 60000));
 
   if (!name || !price || !image) return null;
-  return { name, price, url, sku: sku || skuFromUrl(url), color, image, inStock };
+  return { name, price, url, sku: sku && !/[,\s]/.test(sku) ? sku : skuFromUrl(url), color, image, inStock };
 }
 
 export function extractOffer(html) {
@@ -313,8 +330,11 @@ function skuFromUrl(url) {
   return new URL(url).pathname.split("/").filter(Boolean).pop() || "";
 }
 
-function extractProductLinks(html, baseUrl) {
+function extractProductLinks(html, baseUrl, pattern) {
   const base = new URL(baseUrl);
+  const isProduct = pattern
+    ? (url) => new RegExp(pattern).test(url)
+    : (url) => /\/product\/|\/products\/|\/catalog\/.+\/\d+\/?$|\/p\/|\/goods\//i.test(url);
   const links = [...html.matchAll(/href=["']([^"']+)["']/gi)]
     .map((match) => {
       try {
@@ -326,7 +346,7 @@ function extractProductLinks(html, baseUrl) {
         return "";
       }
     })
-    .filter((url) => url && /\/product\/|\/products\/|\/catalog\/.+\/\d+\/?$|\/p\/|\/goods\//i.test(url));
+    .filter((url) => url && isProduct(url));
   return [...new Set(links)];
 }
 

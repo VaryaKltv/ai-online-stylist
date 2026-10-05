@@ -9,7 +9,7 @@ import { createHealthMonitor } from "./catalog-health.mjs";
 import { loadLocalEnv } from "./env.mjs";
 import { cleanForLog, logger, recentLogs } from "./logger.mjs";
 import { describeProxy } from "./proxy-fetch.mjs";
-import { AiError, isAiConfigured, looksCount, runAiStylist, validateDataUrl } from "./ai-stylist.mjs";
+import { AiError, isAiConfigured, looksCount, normalizeGender, runAiStylist, validateDataUrl } from "./ai-stylist.mjs";
 import { getRenderJob, isRenderEnabled, startRenderJob } from "./render.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -208,6 +208,7 @@ async function handleStylist(request, response) {
     const itemPhoto = validateDataUrl(payload.itemPhotoDataUrl, "Фото вещи");
     const personPhoto = payload.personPhotoDataUrl ? validateDataUrl(payload.personPhotoDataUrl, "Фото человека") : null;
     const form = {
+      gender: normalizeGender(payload.form?.gender),
       occasion: String(payload.form?.occasion || ""),
       budget: String(payload.form?.budget || "middle"),
       itemCategory: String(payload.form?.itemCategory || "верх"),
@@ -215,7 +216,7 @@ async function handleStylist(request, response) {
     };
 
     const { products } = await catalog.getCatalog();
-    logger.log(`[ai] запрос принят: фото человека ${personPhoto ? "есть" : "нет"}, повод «${form.occasion}», бюджет ${form.budget}`);
+    logger.log(`[ai] запрос принят: пол ${form.gender === "men" ? "мужской" : "женский"}, фото человека ${personPhoto ? "есть" : "нет"}, повод «${form.occasion}», бюджет ${form.budget}`);
     const startedAt = Date.now();
     const result = await runAiStylist({ itemPhoto, personPhoto, form, products });
     logger.log(`[ai] готово за ${((Date.now() - startedAt) / 1000).toFixed(1)} с, образов ${result.looks.length}, суммы: ${result.looks.map((look) => `${look.total} ₽`).join(", ")}`);
@@ -272,6 +273,7 @@ async function handleRenderStart(request, response) {
     const productUrls = Array.isArray(payload.productUrls) ? payload.productUrls.filter((url) => typeof url === "string").slice(0, 8) : [];
     const id = await startRenderJob({
       itemPhoto,
+      gender: normalizeGender(payload.gender),
       itemCategory: String(payload.itemCategory || "верх").slice(0, 30),
       productUrls,
       occasion: String(payload.occasion || "").slice(0, 80)

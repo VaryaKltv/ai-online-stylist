@@ -22,7 +22,7 @@ export function getRenderJob(id) {
   return jobs.get(id) || null;
 }
 
-export async function startRenderJob({ itemPhoto, itemCategory, productUrls, occasion }, catalog) {
+export async function startRenderJob({ itemPhoto, itemCategory, productUrls, occasion, gender }, catalog) {
   cleanupJobs();
   if ([...jobs.values()].filter((job) => job.status === "pending").length >= MAX_PENDING_JOBS) {
     throw new AiError("Сейчас идёт много генераций. Попробуйте через минуту.", 429);
@@ -40,14 +40,14 @@ export async function startRenderJob({ itemPhoto, itemCategory, productUrls, occ
   jobs.set(id, { status: "pending", createdAt: Date.now() });
   logger.log(`[render] задание ${id.slice(0, 8)} принято: товаров ${products.length}, вещь «${itemCategory}»`);
 
-  runJob(id, { itemPhoto, itemCategory, products, occasion }).catch((error) => {
+  runJob(id, { itemPhoto, itemCategory, products, occasion, gender }).catch((error) => {
     logger.error(`[render] задание ${id.slice(0, 8)} не выполнено: ${error instanceof AiError ? error.message : error.stack || error.message}`);
     jobs.set(id, { status: "error", createdAt: Date.now(), message: error instanceof AiError ? error.message : "Не удалось создать изображение." });
   });
   return id;
 }
 
-async function runJob(id, { itemPhoto, itemCategory, products, occasion }) {
+async function runJob(id, { itemPhoto, itemCategory, products, occasion, gender }) {
   const startedAt = Date.now();
   const references = await loadProductReferences(products);
   logger.log(`[render] задание ${id.slice(0, 8)}: картинок товаров получено ${references.length} из ${products.length}`);
@@ -57,7 +57,7 @@ async function runJob(id, { itemPhoto, itemCategory, products, occasion }) {
     files.push({ field: "image[]", filename: `product-${index + 1}.jpg`, data: reference.data, type: reference.type });
   });
 
-  const prompt = buildPrompt({ itemCategory, products, references, occasion });
+  const prompt = buildPrompt({ itemCategory, products, references, occasion, gender });
   const result = await requestImage(prompt, files, id);
 
   jobs.set(id, { status: "ready", createdAt: Date.now(), imageDataUrl: result });
@@ -142,13 +142,13 @@ async function loadProductReferences(products) {
   return loaded.filter(Boolean);
 }
 
-function buildPrompt({ itemCategory, products, references, occasion }) {
+function buildPrompt({ itemCategory, products, references, occasion, gender }) {
   const referenceLines = references.map((reference, index) => `image ${index + 2}: ${describe(reference.product)}`);
   const referenced = new Set(references.map((reference) => reference.product.url));
   const withoutReference = products.filter((product) => !referenced.has(product.url));
 
   return [
-    "Create one photorealistic full-length fashion e-commerce photo of a complete outfit shown on a plain white abstract mannequin: no face, no hair, smooth featureless head, standing straight, front view, head to toe fully visible including shoes. Neutral light-gray seamless studio background, soft even lighting, centered composition.",
+    `Create one photorealistic full-length fashion e-commerce photo of a complete outfit shown on a plain white abstract ${gender === "men" ? "male" : "female"} mannequin with ${gender === "men" ? "masculine" : "feminine"} proportions: no face, no hair, smooth featureless head, standing straight, front view, head to toe fully visible including shoes. Neutral light-gray seamless studio background, soft even lighting, centered composition.`,
     `Image 1 is the customer's own garment (category: ${itemCategory}). It is the anchor of the outfit and must be clearly visible on the mannequin. Preserve its color, material, pattern, silhouette and details as closely as possible. Do not replace it with a similar item.`,
     referenceLines.length ? `The other input images are product references, use each strictly for the look of that product:\n${referenceLines.join("\n")}` : "",
     "Reproduce each product's type, color, silhouette, length, fabric look, straps, hardware and shape exactly as in its reference. Never take any person, model, pose, face or background from the product images.",

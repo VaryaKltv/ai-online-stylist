@@ -134,6 +134,79 @@ const stylistKnowledge = {
   }
 };
 
+const menOccasionDefaults = {
+  "офис и встречи": {
+    goal: "выглядеть собранно и уместно для офиса и встреч, без лишней строгости",
+    palette: "белый, голубой, графит, тёмно-синий, коричневая кожа",
+    styles: ["деловой", "smart casual", "минимализм"]
+  },
+  "повседневная одежда": {
+    goal: "собрать удобные современные образы на каждый день",
+    palette: "деним, серый, чёрный, бежевый, спокойные акценты",
+    styles: ["городской casual", "спорт-шик", "удобная база"]
+  },
+  "вечерние наряды": {
+    goal: "выглядеть уверенно и стильно для ужина, свидания или вечернего выхода",
+    palette: "чёрный, тёмно-синий, графит, белый, глубокий бордо",
+    styles: ["вечерний smart casual", "тёмная палитра", "акцент на фактуру"]
+  }
+};
+
+const menOccasionProfiles = {
+  "офис и встречи": {
+    names: ["Деловой минимализм", "Умный casual", "Спокойная классика"],
+    mood: "чистые линии, спокойные цвета и аккуратная обувь",
+    prefer: ["рубашк", "брюк", "чино", "пиджак", "жакет", "поло", "джемпер", "свитер", "кардиган", "лофер", "дерби", "туфл", "ботинк", "ремень", "ремн", "классическ", "хлопк", "твил", "шерст", "кожан", "планшет"],
+    avoid: ["шорт", "худи", "толстовк", "футболк", "кроссовк", "кед", "джоггер", "карго", "кепи", "шапк", "принт", "рван", "спорт", "бини", "трекинг"]
+  },
+  "повседневная одежда": {
+    names: ["Городской casual", "Свободный день", "Спорт-шик"],
+    mood: "удобные вещи на каждый день: деним, трикотаж, мягкая обувь",
+    prefer: ["футболк", "лонгслив", "худи", "толстовк", "свитшот", "джинс", "кроссовк", "кед", "рюкзак", "кепи", "бейсболк", "шапк", "бомбер", "карго", "джоггер", "деним", "шорт"],
+    avoid: ["пиджак", "классическ", "костюм", "туфл", "дерби", "галстук", "лофер"]
+  },
+  "вечерние наряды": {
+    names: ["Тёмная классика", "Вечерний smart casual", "Акцент на фактуру"],
+    mood: "тёмная палитра, хорошая посадка и фактурные материалы",
+    prefer: ["рубашк", "пиджак", "джемпер", "свитер", "поло", "водолазк", "брюк", "чино", "джинс", "ботинк", "лофер", "туфл", "ремень", "ремн", "кожан", "шерст", "замш", "вельвет", "шарф", "планшет"],
+    avoid: ["шорт", "худи", "толстовк", "футболк", "кед", "кроссовк", "джоггер", "шапк", "кепи", "принт", "спорт", "трекинг", "рюкзак"]
+  }
+};
+
+const itemCategoryLabels = {
+  women: { верх: "Верх: футболка, топ, рубашка", низ: "Низ: юбка, брюки, шорты", обувь: "Обувь", сумка: "Сумка", аксессуары: "Аксессуар" },
+  men: { верх: "Верх: футболка, рубашка, свитшот", низ: "Низ: брюки, джинсы, шорты", обувь: "Обувь", сумка: "Сумка или рюкзак", аксессуары: "Аксессуар: ремень, кепка, шарф" }
+};
+
+const occasionLabels = {
+  women: { "офис и встречи": "офис и встречи", "повседневная одежда": "повседневная одежда", "вечерние наряды": "вечерние наряды" },
+  men: { "офис и встречи": "офис и встречи", "повседневная одежда": "повседневная одежда", "вечерние наряды": "вечерний выход" }
+};
+
+const itemHints = {
+  women: "футболка, юбка, сумка, обувь или другая вещь",
+  men: "футболка, рубашка, брюки, обувь или другая вещь"
+};
+
+function currentGender() {
+  return document.querySelector("#gender")?.value === "men" ? "men" : "women";
+}
+
+function applyGenderLabels() {
+  const gender = currentGender();
+  document.querySelectorAll("#itemCategory option").forEach((option) => {
+    option.textContent = itemCategoryLabels[gender][option.value] || option.textContent;
+  });
+  document.querySelectorAll("#occasion option").forEach((option) => {
+    option.textContent = occasionLabels[gender][option.value] || option.textContent;
+  });
+  const hint = document.querySelector("#itemHint");
+  if (hint) hint.textContent = itemHints[gender];
+}
+
+document.querySelector("#gender")?.addEventListener("change", applyGenderLabels);
+applyGenderLabels();
+
 const archetypes = [
   {
     name: "Собранный день",
@@ -236,14 +309,16 @@ function optimizePhoto(file) {
 }
 
 function getFormData() {
+  const gender = currentGender();
   const occasion = document.querySelector("#occasion").value;
-  const goal = defaultGoalsByOccasion[occasion] || "получить собранные актуальные образы под выбранный повод";
-  const styles = defaultStylesByOccasion[occasion] || ["актуальная база"];
+  const men = menOccasionDefaults[occasion];
+  const goal = gender === "men" ? (men?.goal || "собрать актуальные образы под выбранный повод") : (defaultGoalsByOccasion[occasion] || "получить собранные актуальные образы под выбранный повод");
+  const styles = gender === "men" ? (men?.styles || ["актуальная база"]) : (defaultStylesByOccasion[occasion] || ["актуальная база"]);
 
   return {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
-    gender: "women",
+    gender,
     age: document.querySelector("#age")?.value.trim() || "",
     itemCategory: document.querySelector("#itemCategory")?.value || "верх",
     budget: document.querySelector("#budget").value,
@@ -253,7 +328,7 @@ function getFormData() {
     lookCount: defaultLookCount,
     goal,
     styles,
-    colors: defaultPalettesByOccasion[occasion] || "нейтральная база и один аккуратный акцент",
+    colors: gender === "men" ? (men?.palette || "нейтральная база и один аккуратный акцент") : (defaultPalettesByOccasion[occasion] || "нейтральная база и один аккуратный акцент"),
     avoid: "",
     phone: "",
     telegram: "",
@@ -311,6 +386,7 @@ function normalizeCatalogProducts(products) {
     name: product.name,
     displayName: product.displayName || product.name,
     brand: product.brand,
+    gender: product.gender || "women",
     category: product.category,
     price: Number(product.price) || 0,
     url: product.url,
@@ -333,7 +409,9 @@ function validate(data) {
 }
 
 function generateLooks(data) {
-  const baseItems = activeCatalogProducts.filter((product) => product.exactUrl && product.inStock && product.linkOk !== false);
+  if (data.gender === "men") return generateMenLooks(data);
+
+  const baseItems = activeCatalogProducts.filter((product) => product.gender !== "men" && product.exactUrl && product.inStock && product.linkOk !== false);
   if (!hasCompleteProductSet(baseItems)) {
     throw new Error("Не загрузился каталог конкретных товаров. Откройте сервис по ссылке http://127.0.0.1:8012/ai-online-stylist/ и обновите страницу, чтобы образы собирались только из точных карточек магазинов.");
   }
@@ -380,6 +458,83 @@ function generateLooks(data) {
       size: data.size,
       measurements: data.measurements,
       rationale: `Образ собран вокруг вашей вещи, остальное подобрано под повод «${data.occasion}» в пределах ${formatPrice(budgetLimit)}. Настроение образа: ${profile.mood}. Палитра: ${palette}.`
+    };
+  });
+}
+
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function menProductScore(product, profile, usedKeys, random) {
+  const text = `${product.name} ${product.color} ${product.visual}`.toLowerCase();
+  let score = random() * 3;
+  profile.prefer.forEach((word) => { if (text.includes(word)) score += 3; });
+  profile.avoid.forEach((word) => { if (text.includes(word)) score -= 5; });
+  if (usedKeys.has(product.url)) score -= 10;
+  return score;
+}
+
+function pickMenLook(pool, categories, profile, budgetLimit, usedKeys, seed) {
+  let best = null;
+  for (let attempt = 0; attempt < 14; attempt += 1) {
+    const random = seededRandom(seed + attempt * 7919);
+    const order = [...categories].sort(() => random() - 0.5);
+    const chosen = new Map();
+    let total = 0;
+    let score = 0;
+
+    order.forEach((category, position) => {
+      const options = pool.filter((product) => product.category === category);
+      const reserve = order.slice(position + 1).reduce((sum, rest) => sum + Math.min(...pool.filter((product) => product.category === rest).map((product) => product.price)), 0);
+      const affordable = options.filter((product) => product.price <= budgetLimit - total - reserve);
+      const candidates = affordable.length ? affordable : [options.reduce((cheapest, product) => (product.price < cheapest.price ? product : cheapest))];
+      const ranked = candidates.map((product) => ({ product, value: menProductScore(product, profile, usedKeys, random) })).sort((a, b) => b.value - a.value)[0];
+      chosen.set(category, ranked.product);
+      total += ranked.product.price;
+      score += ranked.value;
+    });
+
+    const result = categories.map((category) => chosen.get(category));
+    const rank = (total > budgetLimit ? -1000 : 0) + score;
+    if (!best || rank > best.rank) best = { products: result, total, rank };
+  }
+  return best;
+}
+
+function generateMenLooks(data) {
+  const pool = activeCatalogProducts.filter((product) => (product.gender === "men" || product.gender === "unisex") && product.inStock && product.price > 0 && product.linkOk !== false);
+  const categories = ["верх", "низ", "обувь", "сумка", "аксессуары"].filter((category) => category !== data.itemCategory);
+  if (!categories.every((category) => pool.some((product) => product.category === category))) {
+    throw new Error("В мужском каталоге пока не хватает товаров для такого образа. Попробуйте позже или выберите другую вещь.");
+  }
+
+  const profile = menOccasionProfiles[data.occasion] || menOccasionProfiles["повседневная одежда"];
+  const budgetLimit = budgetLimits[data.budget] || budgetLimits.middle;
+  const palette = data.colors || "нейтральная база и один аккуратный акцент";
+  const baseSeed = [...`${data.id}${data.occasion}`].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const usedKeys = new Set();
+
+  return Array.from({ length: Math.max(1, data.lookCount || 1) }, (_, index) => {
+    const best = pickMenLook(pool, categories, profile, budgetLimit, usedKeys, baseSeed + index * 104729);
+    best.products.forEach((product) => usedKeys.add(product.url));
+    const name = profile.names[index % profile.names.length];
+
+    return {
+      name,
+      title: `Образ ${index + 1}: ${name}`,
+      products: best.products,
+      userItem: data.itemPhoto,
+      userItemCategory: data.itemCategory,
+      total: best.total,
+      budgetLimit,
+      rationale: `Образ собран вокруг вашей вещи, остальное подобрано под повод «${occasionLabels.men[data.occasion] || data.occasion}» в пределах ${formatPrice(budgetLimit)}. Настроение образа: ${profile.mood}. Палитра: ${palette}.`
     };
   });
 }
@@ -935,7 +1090,7 @@ function renderResult(record) {
 
   resultState.innerHTML = `
     <p class="result-kicker">${several ? "Образы готовы" : "Образ готов"}</p>
-    <h2>${escapeHtml(record.data.occasion)}: ${escapeHtml(record.data.goal)}</h2>
+    <h2>${escapeHtml(occasionLabels[record.data.gender]?.[record.data.occasion] || record.data.occasion)}: ${escapeHtml(record.data.goal)}</h2>
     <p class="summary">
       Бюджет на образ: ${budgetName(record.data.budget)}${record.data.age ? `, возраст ${escapeHtml(record.data.age)}` : ""}.
       Ваша вещь есть в каждом образе, а остальные позиции подобраны из магазинов.
@@ -1348,6 +1503,7 @@ async function runRender(session, record, index) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         itemPhotoDataUrl: record.data.itemPhoto.src,
+        gender: record.data.gender,
         itemCategory: record.data.itemCategory,
         occasion: record.data.occasion,
         productUrls: look.products.map((product) => product.url)
@@ -1434,7 +1590,7 @@ async function requestAiLook(data) {
       body: JSON.stringify({
         itemPhotoDataUrl: data.itemPhoto.src,
         personPhotoDataUrl: uploadedPersonData.photo?.src || "",
-        form: { occasion: data.occasion, budget: data.budget, itemCategory: data.itemCategory, age: data.age }
+        form: { gender: data.gender, occasion: data.occasion, budget: data.budget, itemCategory: data.itemCategory, age: data.age }
       })
     });
     const payload = await readJsonResponse(response, "ChatGPT ответил некорректно.");
@@ -1512,6 +1668,7 @@ if (clearHistory) {
 
 sampleButton.addEventListener("click", () => {
   document.querySelector("#gender").value = "women";
+  applyGenderLabels();
   document.querySelector("#age").value = "28";
   document.querySelector("#itemCategory").value = "верх";
   document.querySelector("#budget").value = "middle";

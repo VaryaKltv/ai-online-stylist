@@ -52,7 +52,7 @@
                 <input id="itemPhoto" type="file" accept="image/*" />
                 <span>Загрузить вещь</span>
                 <img id="previewItem" alt="" />
-                <small>футболка, юбка, сумка, обувь или другая вещь</small>
+                <small id="itemHint">футболка, юбка, сумка, обувь или другая вещь</small>
               </label>
 
               <label class="upload-card">
@@ -76,6 +76,7 @@
                 <span>Для кого</span>
                 <select id="gender">
                   <option value="women" selected>Девушка / женщина</option>
+                  <option value="men">Парень / мужчина</option>
                 </select>
               </label>
 
@@ -107,9 +108,9 @@
               <label class="field">
                 <span>Повод</span>
                 <select id="occasion">
-                  <option>офис и встречи</option>
-                  <option>повседневная одежда</option>
-                  <option>вечерние наряды</option>
+                  <option value="офис и встречи">офис и встречи</option>
+                  <option value="повседневная одежда">повседневная одежда</option>
+                  <option value="вечерние наряды">вечерние наряды</option>
                 </select>
               </label>
 
