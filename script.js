@@ -57,6 +57,9 @@ const uploadedItemData = {};
 const uploadedPersonData = {};
 let activeCatalogProducts = [];
 let catalogLoadFailed = false;
+let serverStatus = { aiConfigured: false, renderConfigured: false };
+let currentRecord = null;
+let renderRunId = 0;
 let catalogLinksValidated = false;
 const catalogLoadPromise = loadProductCatalog();
 const statusPromise = loadServerStatus();
@@ -1474,6 +1477,7 @@ function renderResult(record) {
     </div>
     ${record.aiNote ? `<div class="note-box">${escapeHtml(record.aiNote)}</div>` : ""}
     ${renderColorProfile(record.analysis)}
+    ${serverStatus.renderConfigured ? renderBlockMarkup() : ""}
     ${record.looks.map(renderLook).join("")}
     ${renderShoppingSummary(record)}
     <div class="note-box">
@@ -1710,6 +1714,7 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
+  renderRunId += 1;
   showState(loadingState);
   updateLoadingCopy(
     "Собираю образ",
@@ -1732,6 +1737,7 @@ form.addEventListener("submit", async (event) => {
     step = "статус сервера";
     updateLoadingCopy("Проверяю подключение", "Узнаю у сервера, доступен ли ChatGPT.");
     const status = await statusPromise;
+    serverStatus = status;
     let ai = null;
     let aiNote = "";
 
@@ -1777,6 +1783,111 @@ form.addEventListener("submit", async (event) => {
   }
 
   showState(resultState);
+  currentRecord = record;
+  if (serverStatus.renderConfigured) startRender(record);
+});
+
+function renderBlockMarkup() {
+  return `
+    <section class="render-block" data-render>
+      <p class="result-kicker">Образ на манекене</p>
+      <div class="render-body" data-render-body></div>
+    </section>
+  `;
+}
+
+function setRenderState(runId, state, payload) {
+  if (runId !== renderRunId) return;
+  const body = resultState.querySelector("[data-render-body]");
+  if (!body) return;
+  body.replaceChildren();
+
+  if (state === "loading") {
+    const loader = document.createElement("div");
+    loader.className = "loader";
+    const text = document.createElement("p");
+    text.className = "render-text";
+    text.textContent = "ChatGPT рисует образ на манекене. Обычно это 1–2 минуты. Подборка ниже уже готова, страницу можно не закрывать.";
+    body.append(loader, text);
+  } else if (state === "ready") {
+    const image = document.createElement("img");
+    image.className = "render-image";
+    image.alt = "Образ на манекене";
+    image.src = payload;
+    body.append(image);
+  } else {
+    const text = document.createElement("p");
+    text.className = "render-text";
+    text.textContent = `Не удалось нарисовать образ: ${payload}`;
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "ghost-button";
+    retry.dataset.renderRetry = "";
+    retry.textContent = "Повторить";
+    body.append(text, retry);
+  }
+}
+
+async function requestJson(url, options, timeoutMs) {
+  const response = await fetchWithTimeout(url, timeoutMs, options);
+  return readJsonResponse(response, "Сервер ответил некорректно.");
+}
+
+async function startRender(record) {
+  const runId = ++renderRunId;
+  const look = record.looks[0];
+  const startedAt = Date.now();
+  setRenderState(runId, "loading");
+
+  try {
+    const started = await requestJson(`${apiBaseUrl}/api/render`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        itemPhotoDataUrl: record.data.itemPhoto.src,
+        itemCategory: record.data.itemCategory,
+        occasion: record.data.occasion,
+        productUrls: look.products.map((product) => product.url)
+      })
+    }, 30000);
+
+    if (started.status === "disabled") {
+      resultState.querySelector("[data-render]")?.remove();
+      return;
+    }
+    if (started.status !== "pending") throw new Error(started.message || "Генерация не запустилась.");
+
+    let failedPolls = 0;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(3000);
+      if (runId !== renderRunId) return;
+
+      let job;
+      try {
+        job = await requestJson(`${apiBaseUrl}/api/render/${started.id}`, {}, 20000);
+        failedPolls = 0;
+      } catch (error) {
+        failedPolls += 1;
+        if (failedPolls >= 4) throw error;
+        continue;
+      }
+
+      if (job.status === "ready") {
+        setRenderState(runId, "ready", job.imageDataUrl);
+        reportClient("render_ok", { мс: Date.now() - startedAt });
+        return;
+      }
+      if (job.status === "error") throw new Error(job.message || "Генерация не удалась.");
+    }
+    throw new Error("Генерация идёт слишком долго.");
+  } catch (error) {
+    reportClient("render_error", { сообщение: error.message, мс: Date.now() - startedAt });
+    setRenderState(runId, "error", error.message);
+  }
+}
+
+resultState.addEventListener("click", (event) => {
+  if (event.target.closest("[data-render-retry]") && currentRecord) startRender(currentRecord);
 });
 
 async function requestAiLook(data) {

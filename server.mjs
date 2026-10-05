@@ -10,6 +10,7 @@ import { loadLocalEnv } from "./env.mjs";
 import { cleanForLog, logger, recentLogs } from "./logger.mjs";
 import { describeProxy } from "./proxy-fetch.mjs";
 import { AiError, isAiConfigured, runAiStylist, validateDataUrl } from "./ai-stylist.mjs";
+import { getRenderJob, isRenderEnabled, startRenderJob } from "./render.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadLocalEnv(__dirname);
@@ -19,7 +20,7 @@ const productUrlCache = new Map();
 const catalog = createCatalog({ root: __dirname, log: logger });
 const clientLogByIp = new Map();
 const CLIENT_LOG_PER_HOUR = 30;
-const CLIENT_EVENTS = new Set(["submit_ok", "submit_error", "js_error"]);
+const CLIENT_EVENTS = new Set(["submit_ok", "submit_error", "js_error", "render_ok", "render_error"]);
 
 process.on("uncaughtException", (error) => crash("необработанная ошибка", error));
 process.on("unhandledRejection", (error) => crash("необработанный отказ промиса", error));
@@ -34,6 +35,8 @@ function crash(kind, error) {
 }
 const aiRateByIp = new Map();
 const aiDaily = { day: "", count: 0 };
+const renderRateByIp = new Map();
+const renderDaily = { day: "", count: 0 };
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -59,7 +62,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && requestUrl.pathname === "/api/status") {
-      sendJson(response, 200, { status: "ok", aiConfigured: isAiConfigured(), looksSource: catalog.mode });
+      sendJson(response, 200, { status: "ok", aiConfigured: isAiConfigured(), renderConfigured: isRenderEnabled(), looksSource: catalog.mode });
       return;
     }
 
@@ -85,6 +88,16 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && requestUrl.pathname === "/api/render") {
+      await handleRenderStart(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && requestUrl.pathname.startsWith("/api/render/")) {
+      handleRenderStatus(requestUrl.pathname.slice("/api/render/".length), response);
+      return;
+    }
+
     if (request.method === "POST" && requestUrl.pathname === "/api/validate-products") {
       await handleValidateProducts(request, response);
       return;
@@ -102,6 +115,7 @@ server.listen(port, "0.0.0.0", () => {
   logger.log(`[config] источник луков: ${catalog.mode}; ChatGPT: ${isAiConfigured() ? `ключ задан, модель ${process.env.OPENAI_MODEL || "gpt-4o"}` : "ключ НЕ задан"}`);
   logger.log(`[config] прокси для ChatGPT: ${describeConfigured(process.env.OPENAI_PROXY_URL)}; прокси для магазинов: ${describeConfigured(process.env.PARSE_PROXY_URL)}`);
   logger.log(`[config] токен бота: ${process.env.TELEGRAM_BOT_TOKEN ? "задан" : "не задан"}; просмотр логов по адресу: ${process.env.LOGS_TOKEN ? "включён" : "выключен (LOGS_TOKEN не задан)"}`);
+  logger.log(`[config] генерация картинок образа: ${isRenderEnabled() ? `включена, модель ${process.env.OPENAI_IMAGE_MODEL || "gpt-image-1.5"}, качество ${process.env.OPENAI_IMAGE_QUALITY || "medium"}` : "выключена"}`);
   catalog.start();
 });
 
@@ -125,6 +139,8 @@ function logRequest(request, response, durationMs) {
     pathname === "/api/status" ||
     pathname === "/api/catalog" ||
     pathname === "/api/stylist" ||
+    pathname === "/api/render" ||
+    pathname.startsWith("/api/render/") ||
     (!isApi && pathname !== "/" && !pathname.endsWith(".html"))
   );
   if (quiet) return;
@@ -168,7 +184,7 @@ async function handleClientLog(request, response) {
         .slice(0, 8)
         .map(([key, value]) => `${cleanForLog(key, 30)}=${cleanForLog(value, 160)}`)
         .join(", ");
-      logger[payload.event === "submit_ok" ? "log" : "warn"](`[client] ${payload.event}: ${details}; устройство: ${deviceClass(request)}`);
+      logger[payload.event === "submit_ok" || payload.event === "render_ok" ? "log" : "warn"](`[client] ${payload.event}: ${details}; устройство: ${deviceClass(request)}`);
     }
   } catch {
     // мусор от клиента не должен ронять сервер и засорять логи
@@ -218,24 +234,69 @@ async function handleStylist(request, response) {
 }
 
 function checkAiLimits(ip) {
-  const perHour = Number(process.env.AI_RATE_PER_HOUR || 8);
-  const perDay = Number(process.env.AI_DAILY_LIMIT || 300);
+  return checkLimits(ip, aiRateByIp, aiDaily, Number(process.env.AI_RATE_PER_HOUR || 8), Number(process.env.AI_DAILY_LIMIT || 300), "подборок");
+}
+
+function checkLimits(ip, rateByIp, daily, perHour, perDay, noun) {
   const now = Date.now();
   const today = new Date().toISOString().slice(0, 10);
 
-  if (aiDaily.day !== today) {
-    aiDaily.day = today;
-    aiDaily.count = 0;
+  if (daily.day !== today) {
+    daily.day = today;
+    daily.count = 0;
   }
-  if (aiDaily.count >= perDay) return "На сегодня лимит подборок исчерпан. Попробуйте завтра.";
+  if (daily.count >= perDay) return `На сегодня лимит ${noun} исчерпан. Попробуйте завтра.`;
 
-  const recent = (aiRateByIp.get(ip) || []).filter((time) => now - time < 3600 * 1000);
+  const recent = (rateByIp.get(ip) || []).filter((time) => now - time < 3600 * 1000);
   if (recent.length >= perHour) return "Слишком много запросов. Попробуйте через час.";
 
   recent.push(now);
-  aiRateByIp.set(ip, recent);
-  aiDaily.count += 1;
+  rateByIp.set(ip, recent);
+  daily.count += 1;
   return "";
+}
+
+async function handleRenderStart(request, response) {
+  if (!isRenderEnabled()) {
+    sendJson(response, 200, { status: "disabled", message: "Генерация изображений не включена на сервере." });
+    return;
+  }
+
+  const limitMessage = checkLimits(clientIp(request), renderRateByIp, renderDaily, Number(process.env.AI_RENDER_PER_HOUR || 3), Number(process.env.AI_RENDER_DAILY_LIMIT || 100), "картинок");
+  if (limitMessage) {
+    logger.warn(`[render] запрос отклонён лимитом: ${limitMessage}`);
+    sendJson(response, 429, { status: "error", message: limitMessage });
+    return;
+  }
+
+  try {
+    const payload = await readJson(request);
+    const itemPhoto = validateDataUrl(payload.itemPhotoDataUrl, "Фото вещи");
+    const productUrls = Array.isArray(payload.productUrls) ? payload.productUrls.filter((url) => typeof url === "string").slice(0, 8) : [];
+    const id = await startRenderJob({
+      itemPhoto,
+      itemCategory: String(payload.itemCategory || "верх").slice(0, 30),
+      productUrls,
+      occasion: String(payload.occasion || "").slice(0, 80)
+    }, catalog);
+    sendJson(response, 202, { status: "pending", id });
+  } catch (error) {
+    const clientProblem = error instanceof AiError && error.httpStatus < 500;
+    logger[clientProblem ? "warn" : "error"](`[render] ${clientProblem ? "запрос отклонён" : "ошибка"}: ${error instanceof AiError ? error.message : error.stack || error.message}`);
+    sendJson(response, error instanceof AiError ? error.httpStatus : 500, {
+      status: "error",
+      message: error instanceof AiError ? error.message : "Не удалось запустить генерацию."
+    });
+  }
+}
+
+function handleRenderStatus(id, response) {
+  const job = getRenderJob(id);
+  if (!job) {
+    sendJson(response, 404, { status: "error", message: "Задание не найдено или устарело. Запустите генерацию заново." });
+    return;
+  }
+  sendJson(response, 200, { status: job.status, imageDataUrl: job.imageDataUrl, message: job.message });
 }
 
 function clientIp(request) {

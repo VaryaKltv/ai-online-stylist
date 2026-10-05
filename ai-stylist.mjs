@@ -224,13 +224,14 @@ async function callOpenAi(messages, schema) {
   return message.content;
 }
 
-function explainOpenAiError(status, code, message) {
+export function explainOpenAiError(status, code, message) {
   if (code === "unsupported_country_region_territory" || (status === 403 && /country|region|territory/i.test(message))) {
     return "OpenAI не принимает запросы с сервера в этом регионе. Нужен сервер в поддерживаемой стране или OPENAI_BASE_URL с прокси.";
   }
   if (status === 401) return "OpenAI не принял ключ. Проверьте OPENAI_API_KEY.";
   if (status === 429) return "Лимит или баланс OpenAI исчерпан. Проверьте Billing в кабинете OpenAI.";
-  if (status === 404 || code === "model_not_found") return "Модель недоступна для этого ключа. Измените OPENAI_MODEL.";
+  if (status === 404 || code === "model_not_found") return "Модель недоступна для этого ключа. Проверьте OPENAI_MODEL и OPENAI_IMAGE_MODEL.";
+  if (code === "moderation_blocked" || /safety|moderation/i.test(message)) return "OpenAI отклонил генерацию системой безопасности. Попробуйте другое фото вещи.";
   return `OpenAI вернул ошибку: ${message}`;
 }
 
