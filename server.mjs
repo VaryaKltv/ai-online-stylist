@@ -5,19 +5,19 @@ import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCatalog } from "./catalog-source.mjs";
-import { createFetch } from "./proxy-fetch.mjs";
+import { createHealthMonitor } from "./catalog-health.mjs";
 import { loadLocalEnv } from "./env.mjs";
 import { cleanForLog, logger, recentLogs } from "./logger.mjs";
 import { describeProxy } from "./proxy-fetch.mjs";
-import { AiError, isAiConfigured, runAiStylist, validateDataUrl } from "./ai-stylist.mjs";
+import { AiError, isAiConfigured, looksCount, runAiStylist, validateDataUrl } from "./ai-stylist.mjs";
 import { getRenderJob, isRenderEnabled, startRenderJob } from "./render.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadLocalEnv(__dirname);
 const port = Number(process.env.PORT || 8012);
 const maxRequestBodyBytes = 15 * 1024 * 1024;
-const productUrlCache = new Map();
 const catalog = createCatalog({ root: __dirname, log: logger });
+const catalogHealth = createHealthMonitor({ catalog, root: __dirname, log: logger });
 const clientLogByIp = new Map();
 const CLIENT_LOG_PER_HOUR = 30;
 const CLIENT_EVENTS = new Set(["submit_ok", "submit_error", "js_error", "render_ok", "render_error"]);
@@ -62,13 +62,13 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && requestUrl.pathname === "/api/status") {
-      sendJson(response, 200, { status: "ok", aiConfigured: isAiConfigured(), renderConfigured: isRenderEnabled(), looksSource: catalog.mode });
+      sendJson(response, 200, { status: "ok", aiConfigured: isAiConfigured(), renderConfigured: isRenderEnabled(), looksSource: catalog.mode, looksCount: looksCount(), catalogCheckedAt: catalogHealth.checkedAt });
       return;
     }
 
     if (request.method === "GET" && requestUrl.pathname === "/api/catalog") {
-      const { products, source, mode, generatedAt, fallbackReason } = await catalog.getCatalog();
-      logger.log(`[catalog] отдан каталог: источник=${source}, товаров=${products.length}${fallbackReason ? `, причина отката: ${fallbackReason}` : ""}`);
+      const { products, source, mode, generatedAt, fallbackReason, excluded } = await catalog.getCatalog();
+      logger.log(`[catalog] отдан каталог: источник=${source}, товаров=${products.length}${excluded ? `, исключено мёртвых ссылок: ${excluded}` : ""}${fallbackReason ? `, примечание: ${fallbackReason}` : ""}`);
       sendJson(response, 200, { status: "ok", mode, source, generatedAt, fallbackReason, products });
       return;
     }
@@ -98,11 +98,6 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && requestUrl.pathname === "/api/validate-products") {
-      await handleValidateProducts(request, response);
-      return;
-    }
-
     await serveStatic(request, response);
   } catch (error) {
     logger.error(`[http] ошибка обработки ${request.method} ${request.url.split("?")[0]}: ${error.stack || error.message}`);
@@ -115,8 +110,10 @@ server.listen(port, "0.0.0.0", () => {
   logger.log(`[config] источник луков: ${catalog.mode}; ChatGPT: ${isAiConfigured() ? `ключ задан, модель ${process.env.OPENAI_MODEL || "gpt-4o"}` : "ключ НЕ задан"}`);
   logger.log(`[config] прокси для ChatGPT: ${describeConfigured(process.env.OPENAI_PROXY_URL)}; прокси для магазинов: ${describeConfigured(process.env.PARSE_PROXY_URL)}`);
   logger.log(`[config] токен бота: ${process.env.TELEGRAM_BOT_TOKEN ? "задан" : "не задан"}; просмотр логов по адресу: ${process.env.LOGS_TOKEN ? "включён" : "выключен (LOGS_TOKEN не задан)"}`);
+  logger.log(`[config] автопроверка каталога: ${Number(process.env.CATALOG_CHECK_HOURS ?? 6) > 0 ? `раз в ${Number(process.env.CATALOG_CHECK_HOURS ?? 6)} ч` : "выключена"}`);
   logger.log(`[config] генерация картинок образа: ${isRenderEnabled() ? `включена, модель ${process.env.OPENAI_IMAGE_MODEL || "gpt-image-1.5"}, качество ${process.env.OPENAI_IMAGE_QUALITY || "medium"}` : "выключена"}`);
   catalog.start();
+  catalogHealth.start();
 });
 
 function describeConfigured(proxyUrl) {
@@ -221,7 +218,7 @@ async function handleStylist(request, response) {
     logger.log(`[ai] запрос принят: фото человека ${personPhoto ? "есть" : "нет"}, повод «${form.occasion}», бюджет ${form.budget}`);
     const startedAt = Date.now();
     const result = await runAiStylist({ itemPhoto, personPhoto, form, products });
-    logger.log(`[ai] готово за ${((Date.now() - startedAt) / 1000).toFixed(1)} с, сумма ${result.look.total} ₽`);
+    logger.log(`[ai] готово за ${((Date.now() - startedAt) / 1000).toFixed(1)} с, образов ${result.looks.length}, суммы: ${result.looks.map((look) => `${look.total} ₽`).join(", ")}`);
     sendJson(response, 200, { status: "ready", ...result });
   } catch (error) {
     const clientProblem = error instanceof AiError && error.httpStatus < 500;
@@ -262,7 +259,7 @@ async function handleRenderStart(request, response) {
     return;
   }
 
-  const limitMessage = checkLimits(clientIp(request), renderRateByIp, renderDaily, Number(process.env.AI_RENDER_PER_HOUR || 3), Number(process.env.AI_RENDER_DAILY_LIMIT || 100), "картинок");
+  const limitMessage = checkLimits(clientIp(request), renderRateByIp, renderDaily, Number(process.env.AI_RENDER_PER_HOUR || 6), Number(process.env.AI_RENDER_DAILY_LIMIT || 200), "картинок");
   if (limitMessage) {
     logger.warn(`[render] запрос отклонён лимитом: ${limitMessage}`);
     sendJson(response, 429, { status: "error", message: limitMessage });
@@ -301,67 +298,6 @@ function handleRenderStatus(id, response) {
 
 function clientIp(request) {
   return String(request.headers["x-forwarded-for"] || request.socket.remoteAddress || "").split(",")[0].trim();
-}
-
-async function handleValidateProducts(request, response) {
-  const payload = await readJson(request);
-  const products = Array.isArray(payload.products) ? payload.products : [];
-  const results = await Promise.all(products.map(validateProductUrl));
-
-  sendJson(response, 200, {
-    status: "ready",
-    results
-  });
-}
-
-async function validateProductUrl(product) {
-  const key = product.key || product.sku || product.url;
-  if (!product.url) return { key, ok: false, reason: "missing-url" };
-  if (productUrlCache.has(product.url)) return { key, ...productUrlCache.get(product.url) };
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
-
-  try {
-    const doFetch = await createFetch(process.env.PARSE_PROXY_URL);
-    const productResponse = await doFetch(product.url, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.7"
-      }
-    });
-    const status = productResponse.status;
-    const finalUrl = productResponse.url || product.url;
-    const contentType = productResponse.headers.get("content-type") || "";
-    let body = "";
-    if (contentType.includes("text/html")) {
-      body = (await productResponse.text()).slice(0, 180000).toLowerCase();
-    }
-    const notFoundText = /страница не найдена|страница не существует|товар не найден|page not found|404 not found|not found/.test(body);
-    const ok = status >= 200 && status < 400 && !notFoundText;
-    const result = {
-      ok,
-      status,
-      finalUrl,
-      reason: ok ? "ok" : notFoundText ? "not-found-page" : `http-${status}`
-    };
-    productUrlCache.set(product.url, result);
-    return { key, ...result };
-  } catch (error) {
-    const result = {
-      ok: false,
-      status: 0,
-      finalUrl: product.url,
-      reason: error.name === "AbortError" ? "timeout" : error.message
-    };
-    productUrlCache.set(product.url, result);
-    return { key, ...result };
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 async function serveStatic(request, response) {

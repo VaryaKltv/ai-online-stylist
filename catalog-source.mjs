@@ -8,6 +8,7 @@ const USER_AGENT = "StyleMateAI-CatalogBot/1.0";
 const FETCH_TIMEOUT_MS = 12000;
 const FETCH_CONCURRENCY = 4;
 const MIN_PRODUCTS_PER_CATEGORY = 2;
+export const FAIL_THRESHOLD = 2;
 
 let httpFetch = fetch;
 
@@ -23,6 +24,7 @@ export function createCatalog({ root, log = console }) {
   let live = null;
   let syncing = false;
   let lastSyncNote = mode === "parse" ? "синхронизация ещё не завершена" : "";
+  let health = {};
 
   async function readCatalogFile(file) {
     try {
@@ -33,19 +35,40 @@ export function createCatalog({ root, log = console }) {
     }
   }
 
+  async function loadCurated() {
+    curated ||= await readCatalogFile(curatedPath);
+    return curated?.products || [];
+  }
+
+  async function getAllProducts() {
+    const curatedProducts = await loadCurated();
+    const seen = new Set();
+    return [...curatedProducts, ...(live?.products || [])].filter((product) => !seen.has(product.url) && seen.add(product.url));
+  }
+
   async function getCatalog() {
-    if (mode === "parse" && live && hasCompleteSet(live.products)) {
-      return { mode, source: "parse", generatedAt: live.generatedAt, fallbackReason: "", products: live.products };
+    const curatedProducts = await loadCurated();
+    let products = curatedProducts;
+    let source = "local";
+    let generatedAt = curated?.generatedAt || "";
+    let fallbackReason = mode === "parse" ? lastSyncNote : "";
+
+    if (mode === "parse" && live) {
+      const thin = REQUIRED_CATEGORIES.filter((category) => countInStock(live.products, category) < MIN_PRODUCTS_PER_CATEGORY);
+      if (thin.length < REQUIRED_CATEGORIES.length) {
+        products = [...live.products, ...curatedProducts.filter((product) => thin.includes(product.category))];
+        source = thin.length ? "parse+local" : "parse";
+        generatedAt = live.generatedAt;
+        fallbackReason = thin.length ? `со своих сайтов спарсилось мало в категориях: ${thin.join(", ")} — они добраны из локального каталога` : "";
+      }
     }
 
-    curated ||= await readCatalogFile(curatedPath);
-    return {
-      mode,
-      source: "local",
-      generatedAt: curated?.generatedAt || "",
-      fallbackReason: mode === "parse" ? lastSyncNote : "",
-      products: curated?.products || []
-    };
+    const { products: checked, excluded } = applyHealth(products, health);
+    return { mode, source, generatedAt, fallbackReason, excluded, products: checked };
+  }
+
+  function setHealth(items) {
+    health = items || {};
   }
 
   async function sync() {
@@ -62,8 +85,8 @@ export function createCatalog({ root, log = console }) {
       }
 
       const unique = dedupe(normalizeProducts(products));
-      if (!hasCompleteSet(unique)) {
-        lastSyncNote = `парсинг дал только ${unique.length} пригодных товаров, не хватает категорий — используется локальный каталог`;
+      if (!REQUIRED_CATEGORIES.some((category) => countInStock(unique, category) >= MIN_PRODUCTS_PER_CATEGORY)) {
+        lastSyncNote = `парсинг дал только ${unique.length} пригодных товаров, ни в одной категории не набралось достаточно — используется локальный каталог`;
         log.warn(`[catalog] ${lastSyncNote}`);
         return;
       }
@@ -85,12 +108,12 @@ export function createCatalog({ root, log = console }) {
     if (mode !== "parse") return;
     const saved = await readCatalogFile(livePath);
     const fresh = saved && Date.now() - Date.parse(saved.generatedAt || 0) < refreshMs;
-    if (saved && fresh && hasCompleteSet(saved.products)) live = saved;
+    if (saved && fresh && saved.products.length) live = saved;
     if (!live) sync();
     setInterval(sync, refreshMs).unref();
   }
 
-  return { mode, getCatalog, sync, start };
+  return { mode, getCatalog, getAllProducts, setHealth, sync, start };
 }
 
 export function normalizeProducts(items) {
@@ -111,11 +134,30 @@ export function normalizeProducts(items) {
     .filter((item) => item.brand && item.name && item.url && item.price > 0 && REQUIRED_CATEGORIES.includes(item.category));
 }
 
-export function hasCompleteSet(products) {
-  const inStock = products.filter((product) => product.inStock);
-  return REQUIRED_CATEGORIES.every(
-    (category) => inStock.filter((product) => product.category === category).length >= MIN_PRODUCTS_PER_CATEGORY
-  );
+function countInStock(products, category) {
+  return products.filter((product) => product.inStock && product.category === category).length;
+}
+
+export function applyHealth(products, health) {
+  const marked = products.map((product) => {
+    const info = health[product.url];
+    if (!info) return { product, dead: false, failures: 0 };
+    return {
+      product: { ...product, price: info.price || product.price, inStock: info.inStock ?? product.inStock },
+      dead: (info.failures || 0) >= FAIL_THRESHOLD,
+      failures: info.failures || 0
+    };
+  });
+
+  const kept = marked.filter((entry) => !entry.dead);
+  for (const category of REQUIRED_CATEGORIES) {
+    const hasLive = kept.some((entry) => entry.product.category === category);
+    const dead = marked.filter((entry) => entry.dead && entry.product.category === category);
+    if (!hasLive && dead.length) kept.push(...dead.sort((a, b) => a.failures - b.failures).slice(0, MIN_PRODUCTS_PER_CATEGORY));
+  }
+
+  const result = marked.filter((entry) => kept.includes(entry)).map((entry) => entry.product);
+  return { products: result, excluded: products.length - result.length };
 }
 
 function dedupe(products) {
@@ -179,6 +221,17 @@ export function extractProduct(html, url) {
 
   if (!name || !price || !image) return null;
   return { name, price, url, sku: sku || skuFromUrl(url), color, image, inStock };
+}
+
+export function extractOffer(html) {
+  const ld = findJsonLdProduct(html);
+  const offer = Array.isArray(ld?.offers) ? ld.offers[0] : ld?.offers;
+  const price = toPrice(offer?.price) || toPrice(extractMicrodata(html, "price")) || toPrice(extractMeta(html, "product:price:amount"));
+  const availability = String(offer?.availability || "");
+  let inStock;
+  if (/InStock|LimitedAvailability|PreOrder/i.test(availability)) inStock = true;
+  else if (/OutOfStock|SoldOut|Discontinued/i.test(availability)) inStock = false;
+  return { price, inStock };
 }
 
 function findJsonLdProduct(html) {
@@ -277,8 +330,8 @@ function extractProductLinks(html, baseUrl) {
   return [...new Set(links)];
 }
 
-async function loadRobotsRules(baseUrl) {
-  const text = await fetchText(new URL("/robots.txt", baseUrl).toString());
+export async function loadRobotsRules(baseUrl, doFetch = httpFetch) {
+  const text = await fetchText(new URL("/robots.txt", baseUrl).toString(), doFetch);
   const rules = [];
   let applies = false;
   for (const raw of text.split(/\r?\n/)) {
@@ -304,9 +357,9 @@ function robotsPattern(rule) {
   return new RegExp(`^${body}${anchored ? "$" : ""}`);
 }
 
-async function fetchText(url) {
+export async function fetchText(url, doFetch = httpFetch) {
   try {
-    const response = await httpFetch(url, {
+    const response = await doFetch(url, {
       redirect: "follow",
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: { "user-agent": USER_AGENT, accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8", "accept-language": "ru-RU,ru;q=0.9" }
@@ -317,7 +370,7 @@ async function fetchText(url) {
   }
 }
 
-async function mapLimit(items, limit, worker) {
+export async function mapLimit(items, limit, worker) {
   const results = new Array(items.length);
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {

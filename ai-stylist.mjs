@@ -15,6 +15,10 @@ export class AiError extends Error {
   }
 }
 
+export function looksCount() {
+  return Math.min(3, Math.max(2, Number(process.env.LOOKS_COUNT) || 2));
+}
+
 export function isAiConfigured() {
   const key = String(process.env.OPENAI_API_KEY || "").trim();
   return key.startsWith("sk-") && !/your|here/i.test(key);
@@ -41,33 +45,46 @@ export async function runAiStylist({ itemPhoto, personPhoto, form, products }) {
     const reply = await callOpenAi(messages, schema);
     logger.log(`[ai] попытка ${attempt + 1}: ответ OpenAI за ${((Date.now() - askedAt) / 1000).toFixed(1)} с`);
     const result = JSON.parse(reply);
-    const picked = Object.entries(result.look.picks).map(([slot, id]) => candidates.byId.get(id) || { missing: `${slot}:${id}` });
-    const total = picked.reduce((sum, product) => sum + (product.price || 0), 0);
+    const looks = Object.values(result.looks).map((look) => {
+      const picked = Object.entries(look.picks).map(([slot, id]) => candidates.byId.get(id) || { missing: `${slot}:${id}` });
+      return { look, picked, total: picked.reduce((sum, product) => sum + (product.price || 0), 0) };
+    });
 
-    if (picked.some((product) => product.missing)) {
-      lastProblem = "выбран товар, которого нет в списке кандидатов";
-    } else if (total > limit) {
-      lastProblem = `сумма ${total} ₽ превышает бюджет ${limit} ₽`;
-    } else {
+    lastProblem = findProblem(looks, candidates, limit);
+    if (!lastProblem) {
       return {
         analysis: { person: result.person || null, item: result.item },
-        look: {
-          title: result.look.title,
-          rationale: result.look.rationale,
+        looks: looks.map(({ look, picked, total }) => ({
+          title: look.title,
+          rationale: look.rationale,
           total,
           products: picked.map(({ id, ...product }) => product)
-        }
+        }))
       };
     }
 
     logger.warn(`[ai] попытка ${attempt + 1} отклонена: ${lastProblem}`);
     messages.push(
       { role: "assistant", content: reply },
-      { role: "user", content: `Ошибка: ${lastProblem}. Подбери образ заново — строго из списка кандидатов и в пределах бюджета ${limit} ₽.` }
+      { role: "user", content: `Ошибка: ${lastProblem}. Составь образы заново: строго из списка кандидатов, каждый в пределах бюджета ${limit} ₽, и без повторов одних и тех же товаров в разных образах.` }
     );
   }
 
   throw new AiError(`ChatGPT не смог уложиться в условия: ${lastProblem}.`, 502);
+}
+
+function findProblem(looks, candidates, limit) {
+  const numbered = (index) => `образ ${index + 1}`;
+  for (const [index, { picked, total }] of looks.entries()) {
+    if (picked.some((product) => product.missing)) return `в ${numbered(index)} выбран товар, которого нет в списке кандидатов`;
+    if (total > limit) return `сумма ${numbered(index)} (${total} ₽) превышает бюджет ${limit} ₽`;
+  }
+  for (const category of candidates.needed) {
+    if (candidates.bySlot[category].length < looks.length) continue;
+    const ids = looks.map(({ picked }) => picked.find((product) => product.category === category)?.id);
+    if (new Set(ids).size < ids.length) return `в категории «${category}» один и тот же товар выбран в разных образах`;
+  }
+  return "";
 }
 
 export function validateDataUrl(value, label) {
@@ -109,6 +126,7 @@ function buildSchema(candidates, hasPerson) {
     )
   };
 
+  const lookKeys = Array.from({ length: looksCount() }, (_, index) => `look_${index + 1}`);
   const text = { type: "string" };
   const list = { type: "array", items: { type: "string" } };
   const level = (values) => ({ type: "string", enum: values });
@@ -120,11 +138,16 @@ function buildSchema(candidates, hasPerson) {
       required: ["description", "color", "style"],
       properties: { description: text, color: text, style: text }
     },
-    look: {
+    looks: {
       type: "object",
       additionalProperties: false,
-      required: ["title", "rationale", "picks"],
-      properties: { title: text, rationale: text, picks }
+      required: lookKeys,
+      properties: Object.fromEntries(lookKeys.map((key) => [key, {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "rationale", "picks"],
+        properties: { title: text, rationale: text, picks }
+      }]))
     }
   };
 
@@ -152,7 +175,7 @@ function buildSchema(candidates, hasPerson) {
   return {
     type: "object",
     additionalProperties: false,
-    required: hasPerson ? ["person", "item", "look"] : ["item", "look"],
+    required: hasPerson ? ["person", "item", "looks"] : ["item", "looks"],
     properties
   };
 }
@@ -161,7 +184,8 @@ function buildUserContent({ itemPhoto, personPhoto, form, candidates, limit }) {
   const lines = [
     `Повод: ${form.occasion}.`,
     `Вещь клиентки на первом фото относится к категории «${form.itemCategory}» и обязательно входит в образ. Подбери к ней остальные позиции: ${candidates.needed.join(", ")}.`,
-    `Бюджет: сумма цен всех выбранных товаров не должна превышать ${limit} ₽ (вещь клиентки в бюджет не входит).`,
+    `Составь ${looksCount()} разных образа с этой вещью.`,
+    `Бюджет: в каждом образе сумма цен выбранных товаров не должна превышать ${limit} ₽ (вещь клиентки в бюджет не входит).`,
     form.age ? `Возраст, указанный клиенткой: ${form.age}.` : "",
     "",
     "Кандидаты (id | бренд | название | цвет | цена | описание):"
@@ -243,4 +267,4 @@ const SYSTEM_PROMPT = `Ты — профессиональный стилист 
 
 Фото вещи. Кратко опиши, что это за вещь, её цвет и стиль.
 
-Образ. Выбери ровно по одному товару в каждой категории только из списка кандидатов (по id), не придумывай товары. Образ строится вокруг вещи клиентки, подходит под повод, сочетается по цвету и стилю (и с палитрой клиентки, если есть её фото) и укладывается в бюджет по сумме цен. Не бери вещи одного и того же типа дважды. В rationale на 3–5 предложений объясни выбор: цвета, силуэт, повод.`;
+Образы. Составь запрошенное число разных образов. В каждом образе выбери ровно по одному товару в каждой категории только из списка кандидатов (по id), не придумывай товары. Образы строятся вокруг вещи клиентки, подходят под повод, сочетаются по цвету и стилю (и с палитрой клиентки, если есть её фото) и укладываются в бюджет по сумме цен. Образы должны заметно отличаться: не повторяй один и тот же товар в разных образах, делай разное настроение (например, строже и мягче, спокойнее и выразительнее). Не бери вещи одного и того же типа дважды в одном образе. В title дай короткое название образа (2–4 слова), в rationale на 3–5 предложений объясни выбор: цвета, силуэт, повод.`;
